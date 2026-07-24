@@ -1,0 +1,24 @@
+# Data (large, sample-specific -- never belongs in this repo)
+*.fastq
+*.fastq.gz
+*.fasta
+*.fa
+*.fa.gz
+silva/
+sorted/
+sorted_trimmed/
+dada2/filtered/
+*.rds
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+
+# OS
+.DS_Store

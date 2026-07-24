@@ -1,0 +1,107 @@
+# Universal 16S rRNA primer panel.
+#
+# Source: sponge_16s project (freshwater sponge, 9-primer pooled design) plus
+# primer identification work on a Nematostella (cnidarian) sample. All nine
+# pairs share the pooled-non-directional-library convention: a physical
+# amplicon can be sequenced starting from either the forward or the reverse
+# primer end, so sorting must be done in both directions (see
+# bin/sort_amplicons.sh).
+#
+# Each pair lists:
+#   forward / reverse : list of primer sequence variants (degenerate IUPAC
+#                        bases allowed; list multiple entries for primers
+#                        with multiple circulating variants rather than
+#                        relying on IUPAC degeneracy alone)
+#   region             : approximate E. coli 16S rRNA gene span (bp),
+#                        for reference only
+#
+# Cross-host validation (sponge vs. Nematostella, both plastid- and
+# mitochondria-contaminated hosts respectively), all 9 pairs, run THREE
+# times as the method improved -- see examples/nematostella_pilot/README.md
+# for the full writeup, including the mechanistic off-target reason
+# (predict_offtarget.py) and both corrections below.
+#
+#   1. vsearch/OTU + BLAST, ONE read per pair (R1 or R2, whichever oriented
+#      with the forward primer), 9 amplicons: V1V3 (27F/520R) looked like
+#      the clear cross-host winner (88.8% sponge bacterial, 100%
+#      Nematostella).
+#   2. DADA2 ASV + SILVA, BOTH reads per pair (justConcatenate), initially
+#      only 5 amplicons: V1V3's single largest sponge ASV (52% of that
+#      amplicon's reads) turned out to be algal-symbiont mitochondrial DNA
+#      that method 1 completely missed -- it matched neither the organellar
+#      nor the bacterial reference from the R1-only read alone, so it was
+#      silently counted as bacterial by elimination. V1V3 dropped to third.
+#   3. Same ASV+SILVA method, bug fixed, all 9 amplicons: flag_organellar.py
+#      itself had the SAME class of bug -- it only checked Order=="Chloroplast"
+#      / Family=="Mitochondria" and let anything else, including
+#      Kingdom=="Eukaryota" (a divergent animal mitochondrial sequence SILVA
+#      couldn't place inside its Bacteria-trained Mitochondria bin), fall
+#      through to "bacterial" by default. This hid that V4V6 and V3V6 were
+#      99.9% host-mitochondrial in Nematostella -- they had shown as ~100%
+#      bacterial until the fix. Full corrected worst-case-across-hosts
+#      ranking (9 amplicons): V3V4 (94.8%) > V4 (91.8%) > V5V8 (68.8%) >
+#      V6V9 (64.0%) > V1V3 (42.7%) > V6V8 (29.2%) > V7V8 (20.3%) > V3V6
+#      (0.2%) > V4V6 (0.1%).
+#
+# **Current recommendation: V3V4 (341F/806R), with V4 (515F/806R) as a close
+# second.** Both stayed above ~92% bacterial in BOTH hosts. The recurring
+# lesson across all three rounds: any classifier has a default bucket for
+# "didn't match my checks," and if that default is "assume target signal"
+# instead of "assume unknown," a large contamination source can hide in it
+# indefinitely. Always audit what Kingdom/rank values actually appear in
+# your data before trusting a classification script's summary numbers.
+
+primer_pairs:
+  V1V3:
+    forward: [AGAGTTTGATCCTGGCTCAG, AGAGTTTGATCATGGCTCAG]
+    reverse: [CGTCAGGCTTTCGCCCATTG, GGTCAGGCTTTCGCCCATTG, GATCAGGCTTTCGCCCATTG, CGTCAGGCTTGCGCCCATTG]
+    region: "8-534 (V1-V3)"
+    notes: "27F / 520R. 42.7% sponge / 100.0% Nematostella bacterial (worst-case 42.7%). Looked best under the ONE-read vsearch/OTU method; corrected result mid-pack -- see file header. Not currently recommended."
+
+  V3V4:
+    forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
+    reverse: [CTACCAGGGTATCTAATCCT]
+    region: "341-806 (V3-V4)"
+    notes: "341F / 806R. 94.8% sponge / 97.2% Nematostella bacterial (worst-case 94.8%) -- CURRENT RECOMMENDED DEFAULT, best cross-host result across all 9 pairs."
+
+  V3V6:
+    forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
+    reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    region: "341-926 (V3-V6)"
+    notes: "341F / 926R. 19.5% sponge / 0.2% Nematostella bacterial (worst-case 0.2%). AVOID for animal hosts -- 926R has strong predicted and observed cnidarian-mtDNA affinity; 99.8% of Nematostella reads were host-mitochondrial."
+
+  V4:
+    forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
+    reverse: [CTACCAGGGTATCTAATCCT]
+    region: "515-806 (V4)"
+    notes: "515F / 806R. 91.8% sponge / 94.7% Nematostella bacterial (worst-case 91.8%) -- close second choice. 806R has predicted affinity for Stichodactyla-type (anemone) mtDNA, so don't assume this generalizes to every cnidarian host."
+
+  V4V6:
+    forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
+    reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    region: "515-926 (V4-V6)"
+    notes: "515F / 926R. 19.7% sponge / 0.1% Nematostella bacterial (worst-case 0.1%) -- WORST amplicon of the 9 for animal hosts. 515F has ~100% predicted identity to cnidarian mtDNA; 99.9% of Nematostella reads were host-derived."
+
+  V5V8:
+    forward: [MWACGCGMRGAACCTTACCW]
+    reverse: [GACGGGCGGTGTGTACAAGG]
+    region: "967-1389 (~V5-V8)"
+    notes: "~967F / 1389R. 68.8% sponge / 93.1% Nematostella bacterial (worst-case 68.8%)."
+
+  V6V8:
+    forward: [ATGGCTGTCGTCAGCTCGTG]
+    reverse: [GACGGGCGGTGTGTACAAGG]
+    region: "1048-1389 (V6-V8)"
+    notes: "1048F / 1389R. 29.2% sponge / 98.0% Nematostella bacterial (worst-case 29.2%)."
+
+  V6V9:
+    forward: [ATGGCTGTCGTCAGCTCGTG]
+    reverse: [TACCTTGTTACGACTTCGCT, TACCTTGTTACGACTTCATT]
+    region: "1048-1492 (V6-V9)"
+    notes: "1048F / 1492R. 64.0% sponge / 96.1% Nematostella bacterial (worst-case 64.0%)."
+
+  V7V8:
+    forward: [GTAACGAGCGCAACCCTTGT, GCAACGAGCGCAACCCTTGT]
+    reverse: [GACGGGCGGTGTGTACAAGG]
+    region: "1117-1389 (V7-V8)"
+    notes: "V7F / 1389R. 20.3% sponge / 94.8% Nematostella bacterial (worst-case 20.3%)."
