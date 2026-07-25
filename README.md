@@ -132,6 +132,15 @@ python/flag_organellar.py      split into <amp>_bacterial.tsv /
                                   taxa -- no separate reference DB needed
        │
        ▼
+R/check_split_chimeras.R       (optional) for N-spacer-concatenated ASVs
+  (concatenated ASVs only --      only: independently classify the forward
+   N-free true-merges skip        and reverse half, flag ASVs where the two
+   this, already screened by      halves disagree at a chosen rank (default
+   DADA2's overlap-agreement      Phylum) -- catches PCR chimeras with a
+   check at merge time)           breakpoint in the unsequenced R1/R2 gap,
+                                   which removeBimeraDenovo cannot see
+       │
+       ▼
 python/compare_amplicons.py    rank-normalized taxonomic overlap between
                                   any two groups of amplicons' bacterial ASVs
        │
