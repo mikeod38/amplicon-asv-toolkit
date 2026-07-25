@@ -1,12 +1,12 @@
-# Worked example: Nematostella pilot (2026-07-23)
+# Worked example: Nematostella pilot (2026-07-23 → 2026-07-25)
 
 Source sample: `Nv_AD_289_288_S74_L002` (cnidarian, host mitochondrial 16S
 contamination problem), compared against a freshwater sponge sample
 (`SJM_349_228_S11`, plastid symbiont contamination problem) from the
 `sponge_16s` project. Full detail lives in that project's
 `CROSS_HOST_AMPLICON_COMPARISON.md`; this page summarizes the parts that
-motivated this toolkit's design — including two rounds of the comparison
-getting the wrong answer before the third round got it right.
+motivated this toolkit's design — including three rounds of the comparison
+getting the wrong answer before the fourth round got it right.
 
 ## Round 1: vsearch/OTU + BLAST, one read per pair, all 9 amplicons
 
@@ -122,7 +122,7 @@ the BLAST-based finding almost exactly.
 silently defaulted into it. See `python/flag_organellar.py`'s docstring for
 the full explanation.
 
-**Final, corrected, full 9-amplicon, both-hosts, bug-fixed result:**
+**Round 3 result (superseded by round 4 below):**
 
 | Amplicon | Primers | Sponge %bact | Nematostella %bact | Worst-case |
 |---|---|---:|---:|---:|
@@ -136,24 +136,143 @@ the full explanation.
 | V3-V6 | 341F / 926R | 19.5% | 0.2% | 0.2% |
 | V4-V6 | 515F / 926R | 19.7% | 0.1% | 0.1% |
 
-**Current recommendation: V3-V4 (341F/806R)**, with V4 (515F/806R) as a
-close second. Both stayed above ~92% bacterial in both hosts — a
-meaningfully larger margin of safety than V1-V3 ever showed once measured
-correctly.
+## Round 4: anchored sort + hybrid merge + self-derived-reference prefilter — third correction
+
+Three more fixes, applied together and re-run across all 9 amplicons, both
+hosts:
+
+**(a) Anchored primer matching.** `sort_amplicons.py` was matching primers
+with plain cutadapt `-g PRIMER` — unanchored, so it matches anywhere in a
+read, not just at the true 5' start. A specific 42bp read sorted as "V6V8"
+was traced back to its full sequence and shown to actually start with a
+completely different primer (968F-type), only fuzzy-matching 1048F
+internally partway through. Fixed by anchoring (`-g "^PRIMER"`), verified
+against 4 controlled cutadapt cases (exact match, 1 mismatch, truncated
+primer, internal-only match).
+
+**(b) Hybrid merge instead of blanket concatenation.** `run_dada2.R`
+previously used `justConcatenate=TRUE` for every amplicon regardless of
+whether the reads could actually overlap. `merge_hybrid()` now tries a true
+DADA2 overlap-merge first per read pair and only falls back to an
+`NNNNNNNNNN`-spacer concatenation for pairs that don't overlap — V4
+true-merges ~90%+ of its read pairs in real data, recovering real
+overlapping sequence that blanket concatenation was discarding. This also
+fixed a knock-on bug: `addSpecies()` does exact-match species ID and fails
+on the whole taxonomy table if any sequence contains the N-spacer's
+non-ACGT characters. Fixed by splitting N-free (truly-merged) sequences
+from N-containing (concatenated) ones before calling `addSpecies`, running
+species ID only on the clean subset.
+
+**(c) A BLAST pre-filter, built from each sample's own classified organellar
+reads.** The biggest change: `python/prefilter_eukaryotic.py` now BLASTs
+raw reads against a reference database *before* DADA2 ever sees them, and
+drops read pairs where either mate matches. Validated on one amplicon
+first, per instruction, before rolling out: SILVA's Kingdom=Eukaryota rate
+on the filtered output should drop to near-zero if the filter is working,
+which it did. The reference database itself was the harder problem —
+external NCBI mitogenomes (*Nematostella vectensis*, *Ephydatia muelleri*
+as a sponge stand-in, several algal symbiont plastid/mitochondrial
+sequences, even a candidate *Artemia* food-source reference) left real
+residual contamination, because they can't cover strain-level or
+individual-level haplotype variation. The fix:
+`python/build_cluster_refs.py` builds new reference sequences from each
+sample's own **non-prefiltered** SILVA classification output (far more
+data than a prefiltered run's small residual), grouping strictly by
+`(organelle_type, length)` and clustering each group with vsearch at 97%
+identity — cluster **centroids**, not a synthetic consensus, become the new
+references, because a single SILVA category like "mitochondrial" can
+contain multiple genuinely distinct source sequences (e.g. the host's own
+mitochondrion and an algal symbiont's) that a naive consensus would blend
+into something matching neither.
+
+**(d) The plastid-reference specificity bug.** Before trusting the
+self-derived reference database, its sequences were checked against a
+generic bacterial 16S database to rule out the database itself being
+contaminated with real bacterial sequences — 3 hits turned up at the actual
+prefilter thresholds (85% identity / 70% coverage), high enough coverage
+(89-99%) to look concerning. Splitting each hit at its N-spacer and BLASTing
+both halves independently showed all three were genuine, single-source
+plastid sequences (not chimeras) — two hit the toolkit's own known
+algal-symbiont reference on both halves at 96-100% identity, and the third
+(a true, gap-free overlap-merge) showed uniform ~82-85% divergence across
+its full length against real free-living cyanobacteria, exactly the
+expected signature of a plastid gene's cyanobacterial ancestry, not
+contamination. But chasing that thread surfaced a real, separate problem:
+comparing bacterial genera before/after the round-2 prefilter step, a
+genuine free-living cyanobacterium (*Cyanobium* PCC-6307, a plausible real
+member of a freshwater sponge-pond community) had nearly disappeared from
+one amplicon (1,599 matching reads down to 7). Root cause: the self-derived
+**plastid** reference, built from the sample's own algal photosymbiont, is
+evolutionarily close enough to free-living cyanobacteria (plastids **are**
+cyanobacteria-derived) that raw reads carrying the real *Cyanobium*
+sequence BLAST-matched it at 88-95% identity — comfortably above the
+default 85% prefilter threshold — and were removed as "contaminant" even
+though they were real bacterial signal. The two populations aren't cleanly
+separable by identity in this window (a continuous distribution from ~83%
+to 100%, not bimodal), so the fix trades a little residual plastid
+leak-through (which SILVA's own curated Chloroplast bin still catches
+post-hoc) for not discarding real bacterial diversity: a plastid-specific,
+stricter identity floor (`--plastid-min-identity`, default 96%) applied
+only to hits against references tagged plastid/chloroplast, leaving the
+default 85% threshold for mitochondrial and other categories unchanged.
+Verified on real reads: 0/10 *Cyanobium* reads still flagged after the fix
+(down from being removed), while 68/73 (93%) of genuine repeat plastid
+reads are still caught. Re-running the full pipeline with the fix, every
+amplicon in both hosts gained real bacterial reads (never lost any) —
+sponge V5V8 +23%, V6V8 +20%, V7V8 +28%; Nematostella V1V3 +440%.
+
+**With the pre-filter in place, every amplicon in both hosts now comes out
+~100% bacterial** (99.9-100.0%; contamination is removed before DADA2/SILVA
+see it, not classified out afterward) — so **purity stopped being the
+discriminator between primer pairs.** The number that now separates a good
+universal primer from a bad one is **yield**: what fraction of the raw
+reads sorted to that amplicon survive filtering as real bacterial signal,
+plus how many distinct bacterial ASVs it recovers.
+
+**Final, 9-amplicon, both-hosts result:**
+
+| Amplicon | Primers | Sponge yield | Sponge ASVs | Nematostella yield | Nematostella ASVs | Worst-case yield |
+|---|---|---:|---:|---:|---:|---:|
+| **V4** | 515F / 806R | 61.4% | 789 | 61.9% | 46 | **61.4%** |
+| **V5-V8** | ~967F / 1389R | 52.9% | 901 | 74.9% | 36 | **52.9%** |
+| V3-V4 | 341F / 806R | 54.7% | 431 | 32.4% | 26 | 32.4% |
+| V1-V3 | 27F / 520R | 4.6% | 99 | 22.4% | 10 | 4.6% |
+| V7-V8 | V7F / 1389R | 12.4% | 441 | 5.4% | 16 | 5.4% |
+| V6-V8 | 1048F / 1389R | 7.5% | 632 | 6.4% | 19 | 6.4% |
+| V6-V9 | 1048F / 1492R | 5.0% | 74 | 4.2% | 6 | 4.2% |
+| V4-V6 | 515F / 926R | 8.5% | 327 | 0.09% | 22 | 0.09% |
+| V3-V6 | 341F / 926R | 5.0% | 175 | 0.08% | 14 | 0.08% |
+
+**Current recommendation: V4 (515F/806R)**, with V5-V8 (~967F/1389R) as a
+close second (higher Nematostella-specific yield, comparable ASV richness).
+**V3-V4 — the round 3 pick — is now clearly third**: its Nematostella yield
+(32.4%) trails V4/V5-V8 by a wide margin, a gap that round 3's
+%-bacterial-of-classified-reads metric couldn't see because prefiltering
+now normalizes purity to ~100% across the board and yield is what's left to
+differentiate primer pairs on. V4V6 and V3V6 remain unusable in any animal
+host — Nematostella yield stays near zero (0.08-0.09%) even after the full
+fix, confirming this is a genuine, primer-level mitochondrial-affinity
+problem (515F/926R, 341F/926R), not a classifier artifact.
 
 ## The actual lesson
 
 Not "V1-V3 is bad" or "trust SILVA over BLAST" — it's that **every
-classification step in a pipeline like this has an implicit default bucket
-for "didn't match any of my checks,"** and if that default is "assume
-target signal" rather than "assume unknown," a large contamination source
-can hide in it indefinitely, surviving code review because the summary
-numbers look fine. This happened twice in a row, in two different tools
-(the original BLAST-coverage-threshold pipeline, then our own
-Order/Family-only classifier), via two different mechanisms. The fix both
-times was the same: stop trusting the aggregate percentage and go look at
-what specific values are actually in the "unclassified/other" bucket before
-believing a clean-looking summary.
+classification or filtering step in a pipeline like this has an implicit
+default for "didn't clearly match,"** and if that default silently favors
+one outcome, a real signal can hide in it indefinitely, surviving code
+review because the summary numbers look fine. This happened three times, in
+three different tools, via three different mechanisms: the original
+BLAST-coverage-threshold pipeline defaulted unmatched reads to "bacterial";
+our own Order/Family-only classifier defaulted unresolved Kingdom calls to
+"bacterial" too; and a BLAST prefilter's single global identity threshold,
+applied uniformly across biologically heterogeneous reference categories,
+was simultaneously correct for one category (mitochondrial) and too loose
+for another (plastid, because of its cyanobacterial ancestry) — removing
+real signal while looking, in aggregate, like it was working exactly as
+intended. The fix each time was the same instinct: stop trusting the
+aggregate percentage and go look at what's actually inside the "unclassified"
+bucket, or what's actually driving a filter's removals, before believing a
+clean-looking summary.
 
 ## Reproducing
 
@@ -167,8 +286,22 @@ python bin/sort_amplicons.py \
     --amplicons $AMPLICONS \
     --outdir sorted/
 
+# Pre-filter against a sample-specific organellar reference DB (see round 4
+# above for how host_refs/sample_specific_organellar_refs was built). Run
+# per amplicon, per orientation (both _R1/_R2 and _rev_R1/_rev_R2).
+for amp in $(echo $AMPLICONS | tr ',' ' '); do
+  for suffix in "" "_rev"; do
+    python python/prefilter_eukaryotic.py \
+        --r1 sorted/${amp}${suffix}_R1.fastq.gz --r2 sorted/${amp}${suffix}_R2.fastq.gz \
+        --ref-db host_refs/sample_specific_organellar_refs \
+        --out-r1 sorted_filtered/${amp}${suffix}_R1.fastq.gz \
+        --out-r2 sorted_filtered/${amp}${suffix}_R2.fastq.gz \
+        --min-identity 85 --min-coverage 70 --plastid-min-identity 96
+  done
+done
+
 Rscript R/run_dada2.R \
-    --sorted-dir sorted/ --amplicons $AMPLICONS \
+    --sorted-dir sorted_filtered/ --amplicons $AMPLICONS \
     --outdir dada2/ \
     --silva-train silva/silva_nr99_v138.1_train_set.fa.gz \
     --silva-species silva/silva_species_assignment_v138.1.fa.gz
@@ -216,11 +349,16 @@ designed there. Top combined genera, Nematostella:
 
 | Genus | Combined % | Detected in |
 |---|---:|---|
-| Unclassified | 53.0% | 2/2 groups |
-| *Candidatus Hepatoplasma* | 12.1% | 2/2 |
-| RS62 marine group | 9.6% | 2/2 (17.98% front-region vs. 1.30% back-region — CV 1.22, primer-dependent) |
-| *Lentisphaera* | 7.2% | 2/2 |
-| *Simplicispira* | 4.5% | 1/2 (front-region only) |
+| Unclassified | 54.5% | 2/2 groups |
+| *Candidatus Hepatoplasma* | 15.1% | 2/2 |
+| RS62 marine group | 9.9% | 2/2 (17.02% front-region vs. 2.86% back-region — CV 1.01, primer-dependent) |
+| *Lentisphaera* | 9.0% | 2/2 (2.32% front-region vs. 15.71% back-region — CV 1.05, primer-dependent) |
+| *Microscilla* | 1.6% | 2/2 |
+
+(Recomputed against the round-4/final `dada2_final_v2` tables — the taxon
+list and rough proportions are similar to the earlier round-3 numbers, as
+expected: the pre-filter changes *which reads survive to be classified*,
+not the underlying community composition.)
 
 The `cv_across_groups` column is the useful diagnostic here: RS62 marine
 group's high coefficient of variation (1.22) across the two region-groups

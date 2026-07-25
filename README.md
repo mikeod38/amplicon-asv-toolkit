@@ -41,14 +41,18 @@ inside either project:
    sequencing effort — and can hide contamination, not just depth.** The
    common workaround for a too-long amplicon is to keep only R1 (or only
    R2, depending on read orientation) and drop its mate. `run_dada2.R`
-   instead denoises R1 and R2 separately and joins each pair with an
-   `NNNNNNNNNN` spacer (`dada2::mergePairs(..., justConcatenate=TRUE)`), so
-   both primer-proximal ends of every read contribute to the ASV. This
-   isn't just an efficiency win: in the sponge sample, a single ASV
-   representing 52% of the V1-V3 amplicon's reads turned out to be
-   algal-symbiont mitochondrial DNA that the discarded read alone would
-   never have revealed — the kept read matched neither the bacterial nor
-   organellar reference on its own.
+   denoises R1 and R2 separately and merges each pair per-read: a true
+   DADA2 overlap-merge first, falling back to an `NNNNNNNNNN`-spacer
+   concatenation only for the specific read pairs that don't actually
+   overlap (`merge_hybrid()` — a blanket `justConcatenate=TRUE` for every
+   amplicon, an earlier version of this, throws away real overlapping
+   sequence for any amplicon short enough to merge; V4 true-merges ~90%+
+   of read pairs in real data). Either way, both primer-proximal ends of
+   every read contribute to the ASV. This isn't just an efficiency win: in
+   the sponge sample, a single ASV representing 52% of the V1-V3 amplicon's
+   reads turned out to be algal-symbiont mitochondrial DNA that the
+   discarded read alone would never have revealed — the kept read matched
+   neither the bacterial nor organellar reference on its own.
 
 4. **A classifier's default bucket is a liability if it means "assume
    target."** Two separate contamination sources in this project's data
@@ -59,10 +63,37 @@ inside either project:
    its docstring and `examples/nematostella_pilot/README.md` for the full
    story of both misses and how they were caught.
 
+5. **Classifying contamination after the fact is more expensive and less
+   complete than filtering it out before denoising — but a filter's own
+   reference database needs the same scrutiny as a classifier's default
+   bucket.** `python/prefilter_eukaryotic.py` BLASTs raw reads against a
+   sample-specific organellar reference database *before* DADA2 sees them,
+   built from each sample's own SILVA-classified organellar reads,
+   clustered by near-identical sequence rather than collapsed into a naive
+   consensus (`python/build_cluster_refs.py` — one SILVA category, e.g.
+   "mitochondrial," can contain multiple genuinely distinct source
+   sequences that a consensus would blend into something matching none of
+   them). This closes gaps no external reference genome can (divergent
+   host mitogenome haplotypes, symbiont strains with no GenBank entry) and
+   is faster than running the full pipeline on reads you'll discard anyway.
+   But a self-derived **plastid** reference is a special case: it's built
+   from the sample's own algal photosymbiont, and plastids are
+   cyanobacteria-derived, so it's close enough in sequence to free-living
+   cyanobacteria that the same identity threshold used for mitochondrial
+   references removed real bacterial reads, not contamination — confirmed
+   directly (a genuine *Cyanobium* signal collapsed by >99% before this was
+   caught). `prefilter_eukaryotic.py --plastid-min-identity` (default 96%)
+   fixes this with a stricter, category-specific threshold. The lesson
+   generalizes past this one case: a single global threshold applied to a
+   reference database with biologically heterogeneous categories can be
+   simultaneously too loose for one category and too strict for another.
+
 See `examples/nematostella_pilot/README.md` for the full worked example —
 including the mechanistic primer-vs-reference off-target analysis, the
-current 9-amplicon cross-host recommendation, and both rounds of
-contamination that were initially miscounted as bacterial signal.
+current 9-amplicon cross-host recommendation, and all four rounds of
+correction (two involving contamination initially miscounted as bacterial
+signal, one a primer-sorting bug, one the plastid-reference specificity fix
+above).
 
 ## Pipeline
 
@@ -71,14 +102,24 @@ raw R1/R2 fastq.gz
        │
        ▼
 bin/sort_amplicons.py          primer-sort into per-amplicon, per-orientation
-  (cutadapt, forward + reverse   matched R1/R2 pairs (both directions, since
-   sort per primer pair)         a non-directional library reads a fragment
-       │                         from either end)
+  (cutadapt, anchored 5'-match,  matched R1/R2 pairs (both directions, since
+   forward + reverse sort per    a non-directional library reads a fragment
+   primer pair)                  from either end; anchoring prevents a read
+       │                         mis-sorting on a spurious internal match)
+       ▼
+python/prefilter_eukaryotic.py  (optional but recommended) BLAST raw reads
+  (per amplicon, per              against a sample-specific organellar
+   orientation)                   reference DB, drop read pairs where
+       │                          either mate matches -- removes host/
+       │                          symbiont contamination before DADA2 sees
+       │                          it instead of classifying it out after
        ▼
 R/run_dada2.R                  per-orientation filter → learn errors →
-  (DADA2)                        denoise → concatenate-merge (both reads,
-       │                         N-spacer) → pool orientations → chimera
-       │                         removal → SILVA assignTaxonomy/addSpecies
+  (DADA2)                        denoise → per-read-pair hybrid merge (true
+       │                         overlap first, N-spacer concat fallback)
+       │                         → pool orientations → chimera removal →
+       │                         SILVA assignTaxonomy/addSpecies (N-free
+       │                         sequences only)
        ▼
 <amp>_asv_table.tsv            seq, abundance, Kingdom..Species per ASV
        │
@@ -157,7 +198,24 @@ python bin/sort_amplicons.py \
     --amplicons V1V3,V7V8,V6V8,V5V8,V6V9 \
     --outdir sorted/
 
-# 2. ASV inference + SILVA taxonomy
+# 2. (optional, recommended if host/symbiont contamination is heavy)
+#    Pre-filter reads matching a sample-specific organellar reference DB
+#    BEFORE denoising -- see build_cluster_refs.py to build that DB from
+#    a first non-prefiltered pass, if no external reference genome exists.
+#    Note --plastid-min-identity: a self-derived plastid reference is
+#    close enough to free-living cyanobacteria that the default
+#    --min-identity is too loose for that category specifically.
+for amp in V1V3 V7V8 V6V8 V5V8 V6V9; do
+  python python/prefilter_eukaryotic.py \
+      --r1 sorted/${amp}_R1.fastq.gz --r2 sorted/${amp}_R2.fastq.gz \
+      --ref-db host_refs/sample_specific_organellar_refs \
+      --out-r1 sorted_filtered/${amp}_R1.fastq.gz \
+      --out-r2 sorted_filtered/${amp}_R2.fastq.gz \
+      --min-identity 85 --min-coverage 70 --plastid-min-identity 96
+done
+
+# 3. ASV inference + SILVA taxonomy (point --sorted-dir at sorted_filtered/
+#    if step 2 was run)
 Rscript R/run_dada2.R \
     --sorted-dir sorted/ \
     --amplicons V1V3,V7V8,V6V8,V5V8,V6V9 \
@@ -166,7 +224,7 @@ Rscript R/run_dada2.R \
     --silva-species silva/silva_species_assignment_v138.1.fa.gz \
     --threads 8
 
-# 3. Flag organellar ASVs per amplicon
+# 4. Flag organellar ASVs per amplicon
 for amp in V1V3 V7V8 V6V8 V5V8 V6V9; do
   python python/flag_organellar.py \
       --in dada2/${amp}_asv_table.tsv \
@@ -174,7 +232,7 @@ for amp in V1V3 V7V8 V6V8 V5V8 V6V9; do
       --out-organellar dada2/${amp}_organellar.tsv
 done
 
-# 4. Compare V1-V3 against the pooled 1389R-region group at family level
+# 5. Compare V1-V3 against the pooled 1389R-region group at family level
 python python/compare_amplicons.py \
     --group-a dada2/V1V3_bacterial.tsv \
     --group-b dada2/V7V8_bacterial.tsv dada2/V6V8_bacterial.tsv \

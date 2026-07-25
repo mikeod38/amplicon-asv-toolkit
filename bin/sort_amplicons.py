@@ -46,20 +46,37 @@ def load_primers(path):
     return cfg["primer_pairs"]
 
 
-def named_args(flag, prefix, seqs):
-    """Build repeated cutadapt -g/-G NAME=SEQ args, one per primer variant."""
+def named_args(flag, prefix, seqs, anchored=True):
+    """Build repeated cutadapt -g/-G NAME=SEQ args, one per primer variant.
+
+    Anchored (^PRIMER) by default: requires the primer at the true 5' start
+    of the read (still with -e mismatch tolerance within that window), NOT
+    a fuzzy match anywhere in the read. This matters -- unanchored -g finds
+    the primer's best match ANYWHERE and trims up to it, so a read that
+    happens to contain a coincidental fuzzy sub-match to some OTHER
+    primer's sequence partway through (common with 16S primers, which sit
+    in conserved rRNA regions that show up elsewhere in the gene, in host
+    mitochondrial rRNA, etc.) gets mis-sorted into that primer's bucket and
+    trimmed at the wrong position, leaving a short garbage tail instead of
+    being correctly discarded as untrimmed. See amplicon-asv-toolkit
+    examples/nematostella_pilot/README.md for a worked example that traced
+    a batch of ~42bp "V6-V8" reads to exactly this: a read that actually
+    started with a completely different primer, with 1048F only
+    fuzzy-matching a fragment in the middle.
+    """
     args = []
     for i, seq in enumerate(seqs):
         name = f"{prefix}{i}" if i else prefix
-        args += [flag, f"{name}={seq}"]
+        primer = f"^{seq}" if anchored else seq
+        args += [flag, f"{name}={primer}"]
     return args
 
 
 def run_cutadapt(fwd_seqs, rev_seqs, r1_in, r2_in, r1_out, r2_out, log_path,
-                  error_rate, threads, action_none):
+                  error_rate, threads, action_none, anchored=True):
     cmd = ["cutadapt"]
-    cmd += named_args("-g", "F", fwd_seqs)
-    cmd += named_args("-G", "R", rev_seqs)
+    cmd += named_args("-g", "F", fwd_seqs, anchored=anchored)
+    cmd += named_args("-G", "R", rev_seqs, anchored=anchored)
     if action_none:
         cmd += ["--action=none"]
     cmd += [f"-e", str(error_rate), "--discard-untrimmed", "-j", str(threads),
@@ -94,6 +111,13 @@ def main():
     ap.add_argument("--keep-primers", action="store_true",
                      help="Use --action=none (retain primer in output) -- vsearch/OTU-style. "
                           "Default trims primers off, which is what DADA2 needs.")
+    ap.add_argument("--no-anchor", action="store_true",
+                     help="Match the primer anywhere in the read instead of anchoring it to the "
+                          "true 5' start. NOT recommended -- allows coincidental internal fuzzy "
+                          "matches (e.g. to conserved rRNA regions shared with other primers or "
+                          "host mitochondrial sequence) to mis-sort reads and trim at the wrong "
+                          "position. Anchored (default) is standard practice for primer-based "
+                          "amplicon demultiplexing.")
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
@@ -113,11 +137,11 @@ def main():
         run_cutadapt(fwd_seqs, rev_seqs, args.r1, args.r2,
                      outdir / f"{name}_R1.fastq.gz", outdir / f"{name}_R2.fastq.gz",
                      outdir / f"{name}_sort.log",
-                     args.error_rate, args.threads, args.keep_primers)
+                     args.error_rate, args.threads, args.keep_primers, anchored=not args.no_anchor)
         run_cutadapt(rev_seqs, fwd_seqs, args.r1, args.r2,
                      outdir / f"{name}_rev_R1.fastq.gz", outdir / f"{name}_rev_R2.fastq.gz",
                      outdir / f"{name}_rev_sort.log",
-                     args.error_rate, args.threads, args.keep_primers)
+                     args.error_rate, args.threads, args.keep_primers, anchored=not args.no_anchor)
 
         n_fwd = count_reads(outdir / f"{name}_R1.fastq.gz")
         n_rev = count_reads(outdir / f"{name}_rev_R1.fastq.gz")

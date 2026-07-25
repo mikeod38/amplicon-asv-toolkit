@@ -38,18 +38,63 @@
 #      couldn't place inside its Bacteria-trained Mitochondria bin), fall
 #      through to "bacterial" by default. This hid that V4V6 and V3V6 were
 #      99.9% host-mitochondrial in Nematostella -- they had shown as ~100%
-#      bacterial until the fix. Full corrected worst-case-across-hosts
-#      ranking (9 amplicons): V3V4 (94.8%) > V4 (91.8%) > V5V8 (68.8%) >
-#      V6V9 (64.0%) > V1V3 (42.7%) > V6V8 (29.2%) > V7V8 (20.3%) > V3V6
-#      (0.2%) > V4V6 (0.1%).
+#      bacterial until the fix. Ranking at this point: V3V4 (94.8%) > V4
+#      (91.8%) > V5V8 (68.8%) > V6V9 (64.0%) > V1V3 (42.7%) > V6V8 (29.2%)
+#      > V7V8 (20.3%) > V3V6 (0.2%) > V4V6 (0.1%).
+#   4. FINAL round -- three more fixes, all 9 amplicons, both hosts:
+#      (a) anchored primer matching in sort_amplicons.py (unanchored -g
+#      matching let reads mis-sort on a spurious internal fuzzy match to
+#      the wrong primer); (b) a per-read-pair hybrid DADA2 merge
+#      (run_dada2.R's merge_hybrid()) that tries true overlap-merge first
+#      and only falls back to N-spacer concatenation per read pair, instead
+#      of concatenating every pair blindly -- recovers real overlapping
+#      sequence for short amplicons (V4 true-merges ~90%+ of read pairs in
+#      real data); (c) most significantly, a BLAST **pre-filter**
+#      (python/prefilter_eukaryotic.py) that removes host/symbiont
+#      organellar reads BEFORE DADA2 ever sees them, instead of relying on
+#      SILVA to classify contamination out after the fact -- built from a
+#      reference database of each sample's OWN SILVA-classified organellar
+#      reads (build_cluster_refs.py: vsearch-clustered by near-identical
+#      sequence, NOT a naive consensus, since one SILVA category can
+#      contain multiple genuinely distinct source sequences). A final check
+#      of that self-derived database (BLASTing it against a generic
+#      bacterial 16S database) found one more real bug: a self-derived
+#      "plastid" reference is inherently close enough to free-living
+#      cyanobacteria -- plastids ARE cyanobacteria-derived -- that the same
+#      85% identity threshold used for mitochondrial references was
+#      removing real free-living cyanobacterial reads. Confirmed directly
+#      on real data: a genuine Cyanobium PCC-6307 signal (1,599 reads,
+#      sponge V7V8) collapsed to 7 reads under the plastid reference before
+#      this was caught. Fixed with a plastid-specific 96% identity floor
+#      (--plastid-min-identity); verified the fix restores the Cyanobium
+#      signal in full while still catching ~93% of genuine repeat plastid
+#      reads. With the pre-filter in place, every amplicon in both hosts
+#      comes out ~100% bacterial (contamination is removed before
+#      DADA2/SILVA see it, not classified after) -- so **purity stopped
+#      being the discriminator between primer pairs**. The number that now
+#      separates a good universal primer from a bad one is YIELD: fraction
+#      of raw reads sorted to that amplicon that survive as real bacterial
+#      signal, plus ASV richness. Final worst-case-yield ranking (9
+#      amplicons): V4 (61.4%) > V5V8 (52.9%) > V3V4 (32.4%) > V1V3 (4.6%)
+#      > V7V8 (5.4%) > V6V8 (6.4%) > V6V9 (4.2%) > V4V6 (0.09%) > V3V6
+#      (0.08%).
 #
-# **Current recommendation: V3V4 (341F/806R), with V4 (515F/806R) as a close
-# second.** Both stayed above ~92% bacterial in BOTH hosts. The recurring
-# lesson across all three rounds: any classifier has a default bucket for
-# "didn't match my checks," and if that default is "assume target signal"
-# instead of "assume unknown," a large contamination source can hide in it
-# indefinitely. Always audit what Kingdom/rank values actually appear in
-# your data before trusting a classification script's summary numbers.
+# **Current recommendation: V4 (515F/806R), with V5V8 (~967F/1389R) as a
+# close second** (higher Nematostella yield specifically, comparable ASV
+# richness). V3V4 -- the prior round's pick -- is now clearly third: its
+# Nematostella yield (32.4%) is well below V4/V5V8, a gap that was invisible
+# under the old %-bacterial-of-classified-reads metric because prefiltering
+# now normalizes purity across the board and yield is what's left to
+# differentiate on. V4V6 and V3V6 remain unusable in any animal host (yield
+# stays near zero even after the full fix) -- a genuine primer-level
+# mitochondrial-affinity problem (515F/926R, 341F/926R), not a classifier
+# artifact. The recurring lesson across all four rounds: any classifier or
+# filter has a default/threshold for "didn't clearly match," and if that
+# default silently favors one outcome (assume target signal; assume any
+# match at a fixed identity % means contamination) a real signal can hide
+# in it indefinitely -- audit what a script's default bucket actually
+# contains, and check whether a single global threshold is appropriate for
+# every reference category, before trusting summary numbers.
 
 primer_pairs:
   V1V3:
@@ -57,60 +102,60 @@ primer_pairs:
     reverse: [CGTCAGGCTTTCGCCCATTG, GGTCAGGCTTTCGCCCATTG, GATCAGGCTTTCGCCCATTG, CGTCAGGCTTGCGCCCATTG]
     region: "8-534 (V1-V3)"
     span: [8, 534]  # [start, end] for programmatic overlap detection
-    notes: "27F / 520R. 42.7% sponge / 100.0% Nematostella bacterial (worst-case 42.7%). Looked best under the ONE-read vsearch/OTU method; corrected result mid-pack -- see file header. Not currently recommended."
+    notes: "27F / 520R. Final yield (post-prefilter): 4.6% sponge / 22.4% Nematostella (worst-case 4.6%), 99/10 bacterial ASVs. Looked best under the ONE-read vsearch/OTU method; low yield once purity is normalized by prefiltering -- see file header. Not currently recommended."
 
   V3V4:
     forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
     reverse: [CTACCAGGGTATCTAATCCT]
     region: "341-806 (V3-V4)"
     span: [341, 806]  # [start, end] for programmatic overlap detection
-    notes: "341F / 806R. 94.8% sponge / 97.2% Nematostella bacterial (worst-case 94.8%) -- CURRENT RECOMMENDED DEFAULT, best cross-host result across all 9 pairs."
+    notes: "341F / 806R. Final yield (post-prefilter): 54.7% sponge / 32.4% Nematostella (worst-case 32.4%), 431/26 bacterial ASVs. Best pick under the pre-prefilter ASV+SILVA round; now clearly third -- its Nematostella yield trails V4/V5V8 once purity is normalized across all 9 pairs by prefiltering."
 
   V3V6:
     forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
     reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
     region: "341-926 (V3-V6)"
     span: [341, 926]  # [start, end] for programmatic overlap detection
-    notes: "341F / 926R. 19.5% sponge / 0.2% Nematostella bacterial (worst-case 0.2%). AVOID for animal hosts -- 926R has strong predicted and observed cnidarian-mtDNA affinity; 99.8% of Nematostella reads were host-mitochondrial."
+    notes: "341F / 926R. Final yield (post-prefilter): 5.0% sponge / 0.08% Nematostella (worst-case 0.08%), 175/14 bacterial ASVs. AVOID for animal hosts -- 926R has strong predicted and observed cnidarian-mtDNA affinity; Nematostella yield stays near-zero even after the full fix, confirming a genuine primer-level problem, not a classifier artifact."
 
   V4:
     forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
     reverse: [CTACCAGGGTATCTAATCCT]
     region: "515-806 (V4)"
     span: [515, 806]  # [start, end] for programmatic overlap detection
-    notes: "515F / 806R. 91.8% sponge / 94.7% Nematostella bacterial (worst-case 91.8%) -- close second choice. 806R has predicted affinity for Stichodactyla-type (anemone) mtDNA, so don't assume this generalizes to every cnidarian host."
+    notes: "515F / 806R. Final yield (post-prefilter): 61.4% sponge / 61.9% Nematostella (worst-case 61.4%), 789/46 bacterial ASVs -- CURRENT RECOMMENDED DEFAULT, best cross-host yield across all 9 pairs, consistent in both hosts. 806R has predicted affinity for Stichodactyla-type (anemone) mtDNA, so don't assume this generalizes to every cnidarian host."
 
   V4V6:
     forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
     reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
     region: "515-926 (V4-V6)"
     span: [515, 926]  # [start, end] for programmatic overlap detection
-    notes: "515F / 926R. 19.7% sponge / 0.1% Nematostella bacterial (worst-case 0.1%) -- WORST amplicon of the 9 for animal hosts. 515F has ~100% predicted identity to cnidarian mtDNA; 99.9% of Nematostella reads were host-derived."
+    notes: "515F / 926R. Final yield (post-prefilter): 8.5% sponge / 0.09% Nematostella (worst-case 0.09%), 327/22 bacterial ASVs -- WORST amplicon of the 9 for animal hosts. 515F has ~100% predicted identity to cnidarian mtDNA; Nematostella yield stays near-zero even after the full fix."
 
   V5V8:
     forward: [MWACGCGMRGAACCTTACCW]
     reverse: [GACGGGCGGTGTGTACAAGG]
     region: "967-1389 (~V5-V8)"
     span: [967, 1389]  # [start, end] for programmatic overlap detection
-    notes: "~967F / 1389R. 68.8% sponge / 93.1% Nematostella bacterial (worst-case 68.8%)."
+    notes: "~967F / 1389R. Final yield (post-prefilter): 52.9% sponge / 74.9% Nematostella (worst-case 52.9%), 901/36 bacterial ASVs -- close second choice, highest single-host yield of any pair (Nematostella)."
 
   V6V8:
     forward: [ATGGCTGTCGTCAGCTCGTG]
     reverse: [GACGGGCGGTGTGTACAAGG]
     region: "1048-1389 (V6-V8)"
     span: [1048, 1389]  # [start, end] for programmatic overlap detection
-    notes: "1048F / 1389R. 29.2% sponge / 98.0% Nematostella bacterial (worst-case 29.2%)."
+    notes: "1048F / 1389R. Final yield (post-prefilter): 7.5% sponge / 6.4% Nematostella (worst-case 6.4%), 632/19 bacterial ASVs."
 
   V6V9:
     forward: [ATGGCTGTCGTCAGCTCGTG]
     reverse: [TACCTTGTTACGACTTCGCT, TACCTTGTTACGACTTCATT]
     region: "1048-1492 (V6-V9)"
     span: [1048, 1492]  # [start, end] for programmatic overlap detection
-    notes: "1048F / 1492R. 64.0% sponge / 96.1% Nematostella bacterial (worst-case 64.0%)."
+    notes: "1048F / 1492R. Final yield (post-prefilter): 5.0% sponge / 4.2% Nematostella (worst-case 4.2%), 74/6 bacterial ASVs."
 
   V7V8:
     forward: [GTAACGAGCGCAACCCTTGT, GCAACGAGCGCAACCCTTGT]
     reverse: [GACGGGCGGTGTGTACAAGG]
     region: "1117-1389 (V7-V8)"
     span: [1117, 1389]  # [start, end] for programmatic overlap detection
-    notes: "V7F / 1389R. 20.3% sponge / 94.8% Nematostella bacterial (worst-case 20.3%)."
+    notes: "V7F / 1389R. Final yield (post-prefilter): 12.4% sponge / 5.4% Nematostella (worst-case 5.4%), 441/16 bacterial ASVs."

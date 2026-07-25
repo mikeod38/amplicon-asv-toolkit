@@ -4,13 +4,29 @@
 # Generalized from the Nematostella pilot (2026-07-23, sponge_16s /
 # amplicon-asv-toolkit). Key design points, and why:
 #
-# 1. Denoises R1 and R2 SEPARATELY, then joins each pair with an N-spacer
-#    (mergePairs(..., justConcatenate=TRUE)) instead of true overlap-merging.
-#    Most non-V4 16S amplicons (V1-V3, V5-V8, V6-V8, V6-V9, V7-V8, V3-V6,
-#    V4-V6) are too long for 2x151bp reads to overlap. The alternative --
-#    keeping only R1 (or only R2, depending on read orientation) and
-#    discarding its mate -- throws away half the sequencing effort. This
-#    keeps both primer-proximal ends of every read pair.
+# 1. Denoises R1 and R2 SEPARATELY, then merges each pair PER-PAIR: true
+#    overlap-merge (dada2::mergePairs default) where the reads actually
+#    overlap, falling back to N-spacer concatenation only for the specific
+#    (F-ASV, R-ASV) combinations that don't. This matters more than it
+#    might look: blindly using justConcatenate=TRUE for every amplicon
+#    (an earlier version of this script did exactly that) throws away real
+#    overlapping sequence for any amplicon short enough to merge -- V4
+#    (515F/806R) true-merges 82% of reads in real data, V3-V4 merges 36%
+#    (a genuinely mixed population -- some organisms' amplicons are short
+#    enough to overlap, others aren't, so it's a per-read-pair decision,
+#    not a per-amplicon one). True overlap merging is also a real
+#    consistency check that concatenation has NONE of: DADA2 requires the
+#    overlapping bases from R1 and R2 to actually agree (within
+#    maxMismatch, default 0) before accepting a merge, so a read pair
+#    whose R1 and R2 don't belong to the same molecule (e.g. a PCR
+#    chimera, or two different organisms' reads incorrectly forming an
+#    ASV pair) gets rejected rather than silently concatenated. Most
+#    amplicons here (V1-V3, V5-V8, V6-V8, V6-V9, V7-V8, V3-V6, V4-V6) are
+#    still too long for 2x151bp reads to ever overlap (measured 0-3%
+#    true-merge rate) and fall through to concatenation for essentially
+#    all reads, same as before. The alternative to any of this -- keeping
+#    only R1 (or only R2) and discarding its mate -- still throws away
+#    half the sequencing effort either way.
 #
 # 2. Pooled non-directional libraries recover a given amplicon in BOTH
 #    orientations (R1 starts with the forward primer for some pairs, the
@@ -74,7 +90,43 @@ parse_args <- function(args) {
 opt <- parse_args(commandArgs(trailingOnly = TRUE))
 dir.create(opt$outdir, showWarnings = FALSE, recursive = TRUE)
 
-# ── Per-orientation: filter, learn errors, denoise, concatenate-merge ──────
+# ── Hybrid merge: true overlap where it exists, N-spacer concat as a
+#    per-pair fallback only for (F-ASV, R-ASV) combinations that don't
+#    overlap sufficiently to merge. ─────────────────────────────────────
+rc <- function(seqs) as.character(Biostrings::reverseComplement(Biostrings::DNAStringSet(seqs)))
+
+merge_hybrid <- function(ddF, filtF, ddR, filtR, amp, tag) {
+  m <- mergePairs(ddF, filtF, ddR, filtR, returnRejects = TRUE, verbose = FALSE)
+  n_total <- sum(m$abundance)
+  n_true <- sum(m$abundance[m$accept])
+
+  accepted <- if (any(m$accept)) {
+    data.frame(sequence = m$sequence[m$accept], abundance = m$abundance[m$accept])
+  } else {
+    data.frame(sequence = character(0), abundance = integer(0))
+  }
+
+  rejected <- m[!m$accept, , drop = FALSE]
+  fallback <- if (nrow(rejected) > 0) {
+    seqsF <- unname(getSequences(ddF))
+    seqsR <- unname(getSequences(ddR))
+    concat_seqs <- paste0(seqsF[rejected$forward], strrep("N", 10), rc(seqsR[rejected$reverse]))
+    data.frame(sequence = concat_seqs, abundance = rejected$abundance)
+  } else {
+    data.frame(sequence = character(0), abundance = integer(0))
+  }
+
+  combined <- rbind(accepted, fallback)
+  agg <- stats::aggregate(abundance ~ sequence, combined, sum)
+  seqtab <- matrix(agg$abundance, nrow = 1, dimnames = list(paste0(amp, "_", tag), agg$sequence))
+
+  cat(sprintf("  [%s/%s] true-overlap merged: %d/%d reads (%.1f%%); concatenated (fallback): %d/%d reads (%.1f%%)\n",
+              amp, tag, n_true, n_total, 100 * n_true / n_total,
+              n_total - n_true, n_total, 100 * (n_total - n_true) / n_total))
+  seqtab
+}
+
+# ── Per-orientation: filter, learn errors, denoise, hybrid-merge ──────────
 process_orientation <- function(amp, f_path, r_path, tag, outdir, threads, max_ee, trunc_q) {
   filt_dir <- file.path(outdir, "filtered", amp)
   dir.create(filt_dir, showWarnings = FALSE, recursive = TRUE)
@@ -99,10 +151,7 @@ process_orientation <- function(amp, f_path, r_path, tag, outdir, threads, max_e
   ddF <- dada(filt_f, err = errF, multithread = threads, verbose = 0)
   ddR <- dada(filt_r, err = errR, multithread = threads, verbose = 0)
 
-  merged <- mergePairs(ddF, filt_f, ddR, filt_r, justConcatenate = TRUE, verbose = TRUE)
-  seqtab <- makeSequenceTable(merged)
-  rownames(seqtab) <- paste0(amp, "_", tag)
-  seqtab
+  merge_hybrid(ddF, filt_f, ddR, filt_r, amp, tag)
 }
 
 all_seqtabs <- list()
@@ -150,8 +199,27 @@ for (amp in names(all_seqtabs)) {
   seqtab <- all_seqtabs[[amp]]
   tax <- assignTaxonomy(seqtab, opt$silva_train, multithread = opt$threads, verbose = TRUE)
   if (!is.null(opt$silva_species)) {
-    tax <- tryCatch(addSpecies(tax, opt$silva_species, verbose = TRUE),
-                     error = function(e) { cat("  addSpecies failed:", conditionMessage(e), "\n"); tax })
+    # addSpecies() does exact-match species ID and errors on the WHOLE table
+    # if ANY sequence contains non-ACGT characters -- which the N-spacer
+    # from a concatenated (non-overlapping) ASV always does. Since the
+    # hybrid merge (merge_hybrid, above) now produces a mix of truly
+    # overlap-merged sequences (clean ACGT, N-free) and concatenated
+    # fallback sequences (contain N's) in the same table, splitting them
+    # lets addSpecies succeed on the N-free subset instead of failing for
+    # the whole amplicon. Species stays NA for concatenated sequences,
+    # which is correct -- exact species matching against a spacer-joined,
+    # non-contiguous sequence isn't meaningful anyway.
+    clean_seqs <- rownames(tax)[!grepl("N", rownames(tax), fixed = TRUE)]
+    if (length(clean_seqs) > 0) {
+      tax_clean <- addSpecies(tax[clean_seqs, , drop = FALSE], opt$silva_species, verbose = TRUE)
+      tax <- cbind(tax, Species = NA_character_)
+      tax[clean_seqs, "Species"] <- tax_clean[, "Species"]
+      cat(sprintf("  [%s] addSpecies run on %d/%d N-free (truly-merged) sequences\n",
+                  amp, length(clean_seqs), nrow(tax)))
+    } else {
+      tax <- cbind(tax, Species = NA_character_)
+      cat(sprintf("  [%s] no N-free sequences -- addSpecies skipped entirely\n", amp))
+    }
   }
   saveRDS(tax, file.path(opt$outdir, paste0(amp, "_taxonomy.rds")))
 
