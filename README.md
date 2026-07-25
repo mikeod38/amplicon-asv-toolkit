@@ -93,7 +93,39 @@ python/flag_organellar.py      split into <amp>_bacterial.tsv /
        ▼
 python/compare_amplicons.py    rank-normalized taxonomic overlap between
                                   any two groups of amplicons' bacterial ASVs
+       │
+       ▼
+python/aggregate_abundance.py  ONE combined community profile across all
+                                  amplicons, accounting for the fact that
+                                  several of them target overlapping gene
+                                  regions (see below)
 ```
+
+### Combining abundance across amplicons that overlap
+
+If you want a single community profile instead of per-amplicon ones,
+`compare_amplicons.py` isn't the tool for that (it only compares two
+groups' taxon sets). `aggregate_abundance.py` builds one, but naively
+summing or averaging raw percentages across all amplicons would be wrong
+here: 5 of this panel's 9 pairs (V1V3, V3V4, V3V6, V4, V4V6) substantially
+overlap each other's gene span, and the other 4 (V5V8, V6V8, V6V9, V7V8)
+overlap each other too — so summing treats "9 amplicons" as 9 independent
+samples when it's really closer to 2 independently-targeted regions that
+happened to get 5 and 4 redundant primer pairs tested in them,
+respectively.
+
+`aggregate_abundance.py` clusters amplicons by pairwise span overlap
+(`span: [start, end]` in `primers_16s_universal.yaml`, single-linkage at a
+configurable minimum-bp threshold), pools raw counts *within* each
+resulting region-group (depth-weighted — appropriate since group members
+are redundant assays of the same region), then takes the **unweighted
+mean** *across* region-groups per taxon — so each independently-targeted
+region contributes equally to the final number regardless of how many
+redundant primer pairs or how much depth it happened to get. Output
+includes each taxon's per-group percentage and the coefficient of
+variation across groups, so you can see when a taxon's apparent abundance
+is primer-region-dependent (likely bias) rather than stable across
+independent measurements.
 
 `python/predict_offtarget.py` is a standalone tool, used *before* committing
 to a primer pair: given candidate primer sequences and off-target reference

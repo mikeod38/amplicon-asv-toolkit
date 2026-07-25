@@ -184,10 +184,51 @@ python python/compare_amplicons.py \
     --group-b dada2/V7V8_bacterial.tsv dada2/V6V8_bacterial.tsv \
               dada2/V5V8_bacterial.tsv dada2/V6V9_bacterial.tsv \
     --rank Family --label-a V1-V3 --label-b "V5-V9 region"
+
+# One combined community profile, accounting for the overlapping amplicons
+python python/aggregate_abundance.py \
+    --primers config/primers_16s_universal.yaml \
+    --tables-dir dada2/ --amplicons V1V3,V3V4,V3V6,V4,V4V6,V5V8,V6V8,V6V9,V7V8 \
+    --rank Genus --min-overlap-bp 100 \
+    --out dada2/combined_genus_abundance.tsv
 ```
 
 Repeat the same commands against the sponge sample's R1/R2 to reproduce the
 cross-host comparison.
+
+## Combining abundance across the full 9-amplicon panel
+
+`aggregate_abundance.py` clusters the 9 amplicons by pairwise span overlap
+(threshold 100bp) and finds exactly **2 region-groups**, not 9 independent
+samples:
+
+- `{V1V3, V3V4, V3V6, V4, V4V6}` — spans ~8-926 (V1-V3 links in via a 193bp
+  overlap with V3V4/V3V6 at the V3 region; its 19bp sliver of overlap with
+  V4/V4V6 alone falls below the clustering threshold, but transitive
+  linkage through V3V4 still pulls it into the same group)
+- `{V5V8, V6V8, V6V9, V7V8}` — spans ~967-1492
+
+Within each group, counts are pooled (depth-weighted); across the 2 groups,
+the final combined percentage is an unweighted mean — so the "front" region
+(5 redundant primer pairs tested) doesn't get 5x the influence of the
+"back" region (4 primer pairs) just because more amplicons happened to be
+designed there. Top combined genera, Nematostella:
+
+| Genus | Combined % | Detected in |
+|---|---:|---|
+| Unclassified | 53.0% | 2/2 groups |
+| *Candidatus Hepatoplasma* | 12.1% | 2/2 |
+| RS62 marine group | 9.6% | 2/2 (17.98% front-region vs. 1.30% back-region — CV 1.22, primer-dependent) |
+| *Lentisphaera* | 7.2% | 2/2 |
+| *Simplicispira* | 4.5% | 1/2 (front-region only) |
+
+The `cv_across_groups` column is the useful diagnostic here: RS62 marine
+group's high coefficient of variation (1.22) across the two region-groups
+means its apparent abundance is heavily primer-dependent — treat that
+number as "detected, primer-region-sensitive," not as a precise
+community-wide estimate. Genera with low CV and detection in both groups
+(*Candidatus Hepatoplasma*, *Lentisphaera*) are the more trustworthy
+abundance estimates.
 
 Note: input fastqs, `sorted/`, and `dada2/` outputs are not tracked in this
 repo (see `.gitignore`) — this page documents the run, it doesn't ship the

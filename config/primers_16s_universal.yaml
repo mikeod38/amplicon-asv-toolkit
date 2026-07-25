@@ -56,52 +56,61 @@ primer_pairs:
     forward: [AGAGTTTGATCCTGGCTCAG, AGAGTTTGATCATGGCTCAG]
     reverse: [CGTCAGGCTTTCGCCCATTG, GGTCAGGCTTTCGCCCATTG, GATCAGGCTTTCGCCCATTG, CGTCAGGCTTGCGCCCATTG]
     region: "8-534 (V1-V3)"
+    span: [8, 534]  # [start, end] for programmatic overlap detection
     notes: "27F / 520R. 42.7% sponge / 100.0% Nematostella bacterial (worst-case 42.7%). Looked best under the ONE-read vsearch/OTU method; corrected result mid-pack -- see file header. Not currently recommended."
 
   V3V4:
     forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
     reverse: [CTACCAGGGTATCTAATCCT]
     region: "341-806 (V3-V4)"
+    span: [341, 806]  # [start, end] for programmatic overlap detection
     notes: "341F / 806R. 94.8% sponge / 97.2% Nematostella bacterial (worst-case 94.8%) -- CURRENT RECOMMENDED DEFAULT, best cross-host result across all 9 pairs."
 
   V3V6:
     forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
     reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
     region: "341-926 (V3-V6)"
+    span: [341, 926]  # [start, end] for programmatic overlap detection
     notes: "341F / 926R. 19.5% sponge / 0.2% Nematostella bacterial (worst-case 0.2%). AVOID for animal hosts -- 926R has strong predicted and observed cnidarian-mtDNA affinity; 99.8% of Nematostella reads were host-mitochondrial."
 
   V4:
     forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
     reverse: [CTACCAGGGTATCTAATCCT]
     region: "515-806 (V4)"
+    span: [515, 806]  # [start, end] for programmatic overlap detection
     notes: "515F / 806R. 91.8% sponge / 94.7% Nematostella bacterial (worst-case 91.8%) -- close second choice. 806R has predicted affinity for Stichodactyla-type (anemone) mtDNA, so don't assume this generalizes to every cnidarian host."
 
   V4V6:
     forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
     reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
     region: "515-926 (V4-V6)"
+    span: [515, 926]  # [start, end] for programmatic overlap detection
     notes: "515F / 926R. 19.7% sponge / 0.1% Nematostella bacterial (worst-case 0.1%) -- WORST amplicon of the 9 for animal hosts. 515F has ~100% predicted identity to cnidarian mtDNA; 99.9% of Nematostella reads were host-derived."
 
   V5V8:
     forward: [MWACGCGMRGAACCTTACCW]
     reverse: [GACGGGCGGTGTGTACAAGG]
     region: "967-1389 (~V5-V8)"
+    span: [967, 1389]  # [start, end] for programmatic overlap detection
     notes: "~967F / 1389R. 68.8% sponge / 93.1% Nematostella bacterial (worst-case 68.8%)."
 
   V6V8:
     forward: [ATGGCTGTCGTCAGCTCGTG]
     reverse: [GACGGGCGGTGTGTACAAGG]
     region: "1048-1389 (V6-V8)"
+    span: [1048, 1389]  # [start, end] for programmatic overlap detection
     notes: "1048F / 1389R. 29.2% sponge / 98.0% Nematostella bacterial (worst-case 29.2%)."
 
   V6V9:
     forward: [ATGGCTGTCGTCAGCTCGTG]
     reverse: [TACCTTGTTACGACTTCGCT, TACCTTGTTACGACTTCATT]
     region: "1048-1492 (V6-V9)"
+    span: [1048, 1492]  # [start, end] for programmatic overlap detection
     notes: "1048F / 1492R. 64.0% sponge / 96.1% Nematostella bacterial (worst-case 64.0%)."
 
   V7V8:
     forward: [GTAACGAGCGCAACCCTTGT, GCAACGAGCGCAACCCTTGT]
     reverse: [GACGGGCGGTGTGTACAAGG]
     region: "1117-1389 (V7-V8)"
+    span: [1117, 1389]  # [start, end] for programmatic overlap detection
     notes: "V7F / 1389R. 20.3% sponge / 94.8% Nematostella bacterial (worst-case 20.3%)."
