@@ -254,6 +254,59 @@ host — Nematostella yield stays near zero (0.08-0.09%) even after the full
 fix, confirming this is a genuine, primer-level mitochondrial-affinity
 problem (515F/926R, 341F/926R), not a classifier artifact.
 
+## Round 5: resolving Genus=NA bacterial ASVs
+
+A different kind of gap from rounds 1-4: not a bug, but a real limitation
+of trusting one classifier alone. SILVA's naive-Bayes `assignTaxonomy()`
+reports NA below whatever rank its bootstrap confidence threshold fails,
+rather than guessing — appropriately conservative, but on both pilot hosts
+it left the *majority* of real, confidently-`Kingdom=Bacteria` reads with
+no Genus call at all (64.6% of sponge bacterial reads, 55.4% of
+Nematostella's), which then dominates any genus-level summary as
+"Unclassified" — the single largest "genus" in both hosts' combined
+abundance tables — despite being real signal, not noise.
+
+`python/resolve_unclassified_bacteria.py` closes most of this gap by
+BLASTing Genus=NA ASVs against a general bacterial/archaeal 16S reference
+(NCBI's 27,648-strain type-strain set, not a sample-specific one — the job
+here is species ID against known taxa broadly). Concatenated (N-spacer)
+ASVs are split and each half BLASTed independently, for the same reason
+`check_split_chimeras.R` does: BLASTing a concatenated sequence as one
+query against complete, contiguous reference genes produces a blended,
+non-representative alignment. Each hit is reported with a confidence tier
+by standard 16S-identity convention (Yarza et al. 2014: ≥98.7% species,
+≥94.5% genus, ≥86.5% family, ≥82% order, ≥78.5% class, ≥75% phylum) rather
+than a single pass/fail call — "we can say what family this is" is still a
+real result even when species-level ID fails.
+
+Rolled out across all 9 amplicons, both hosts: only 0.1% of previously
+Genus=NA reads in either host got no usable hit at all even at the
+phylum-level floor; the rest resolved to at least family tier, roughly half
+to genus or species tier. One wrinkle worth flagging rather than hiding:
+many split ASVs' two halves best-match *different* named genera via BLAST
+(163/222 Genus=NA ASVs in sponge V3-V4, for example) — this looks like
+chimera evidence at first glance, but cross-checking against
+`check_split_chimeras.R`'s SILVA-based Phylum-level call (a much broader
+reference than the 27k-strain BLAST set) found **zero** true disagreements
+among 14 BLAST-disagreeing ASVs in one amplicon. The likelier explanation:
+a 27k-strain database has much sparser coverage than SILVA's full training
+set, so two genuinely non-chimeric halves of one real, poorly-represented
+organism can each independently BLAST-match a different, moderately
+divergent "closest available" relative (both around 88-97% identity —
+genus/family tier, not the near-100% a true match to the actual organism
+would show).
+
+`python/backfill_resolved_genus.py` folds the confident (species/genus-tier
+only — family-tier-or-worse stays `Unclassified` rather than writing in a
+genus we're not actually sure of) resolutions back into a
+flag_organellar.py-shaped bacterial table, a drop-in replacement for
+`aggregate_abundance.py --tables-dir`. Effect on the combined genus
+abundance tables: **Unclassified 63.8% → 32.3% (sponge), 54.5% → 24.2%
+(Nematostella)** — including surfacing a previously-hidden dominant taxon,
+*Desulfuromusa*, at 28.7% combined abundance in Nematostella (traced back
+to a single 9,189-read ASV in V5-V8 that SILVA couldn't place below
+Kingdom at all).
+
 ## The actual lesson
 
 Not "V1-V3 is bad" or "trust SILVA over BLAST" — it's that **every
@@ -273,6 +326,14 @@ intended. The fix each time was the same instinct: stop trusting the
 aggregate percentage and go look at what's actually inside the "unclassified"
 bucket, or what's actually driving a filter's removals, before believing a
 clean-looking summary.
+
+Round 5 is the same instinct pointed at a subtler case: SILVA's
+"unclassified" wasn't a bug, it was appropriate conservatism — but treating
+one classifier's conservative NA as the final word, rather than as an
+invitation to try a second, differently-calibrated method (BLAST against a
+broader, named-taxon reference) on exactly that residual, would have left
+the single largest taxon in the whole dataset permanently mislabeled as
+"nothing."
 
 ## Reproducing
 
@@ -345,20 +406,33 @@ Within each group, counts are pooled (depth-weighted); across the 2 groups,
 the final combined percentage is an unweighted mean — so the "front" region
 (5 redundant primer pairs tested) doesn't get 5x the influence of the
 "back" region (4 primer pairs) just because more amplicons happened to be
-designed there. Top combined genera, Nematostella:
+designed there. Top combined genera, **after round 5's Genus=NA
+resolution** (see above — this is the version to use; the pre-round-5
+numbers undercounted real signal by conflating it with "Unclassified"):
+
+**Nematostella:**
 
 | Genus | Combined % | Detected in |
 |---|---:|---|
-| Unclassified | 54.5% | 2/2 groups |
+| *Desulfuromusa* | 28.7% | 1/2 (0% front-region, 57.4% back-region — a single dominant V5-V8 ASV, previously buried in "Unclassified") |
+| Unclassified | 24.1% | 2/2 (down from 54.5% pre-resolution) |
 | *Candidatus Hepatoplasma* | 15.1% | 2/2 |
 | RS62 marine group | 9.9% | 2/2 (17.02% front-region vs. 2.86% back-region — CV 1.01, primer-dependent) |
 | *Lentisphaera* | 9.0% | 2/2 (2.32% front-region vs. 15.71% back-region — CV 1.05, primer-dependent) |
-| *Microscilla* | 1.6% | 2/2 |
 
-(Recomputed against the round-4/final `dada2_final_v2` tables — the taxon
-list and rough proportions are similar to the earlier round-3 numbers, as
-expected: the pre-filter changes *which reads survive to be classified*,
-not the underlying community composition.)
+**Sponge:**
+
+| Genus | Combined % | Detected in |
+|---|---:|---|
+| Unclassified | 32.3% | 2/2 (down from 63.8% pre-resolution) |
+| *Sulfuriferula* | 11.6% | 1/2 (0% front-region, 23.2% back-region) |
+| *Cyanobium* PCC-6307 | 4.8% | 2/2 — the real free-living cyanobacterium from round 4's plastid-threshold fix |
+| *Nordella* | 4.1% | 1/2 (0% front-region, 8.1% back-region) |
+| *Polynucleobacter* | 4.0% | 2/2 (6.94% front-region vs. 0.99% back-region — CV 1.06, primer-dependent) |
+
+(All recomputed against the round-4/final `dada2_final_v2` tables, with
+round 5's confident Genus backfill applied — see
+`python/backfill_resolved_genus.py`.)
 
 The `cv_across_groups` column is the useful diagnostic here: RS62 marine
 group's high coefficient of variation (1.22) across the two region-groups
