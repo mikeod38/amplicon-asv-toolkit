@@ -296,16 +296,32 @@ divergent "closest available" relative (both around 88-97% identity —
 genus/family tier, not the near-100% a true match to the actual organism
 would show).
 
-`python/backfill_resolved_genus.py` folds the confident (species/genus-tier
-only — family-tier-or-worse stays `Unclassified` rather than writing in a
-genus we're not actually sure of) resolutions back into a
+`python/backfill_resolved_genus.py` folds the resolution back into a
 flag_organellar.py-shaped bacterial table, a drop-in replacement for
-`aggregate_abundance.py --tables-dir`. Effect on the combined genus
-abundance tables: **Unclassified 63.8% → 32.3% (sponge), 54.5% → 24.2%
-(Nematostella)** — including surfacing a previously-hidden dominant taxon,
-*Desulfuromusa*, at 28.7% combined abundance in Nematostella (traced back
-to a single 9,189-read ASV in V5-V8 that SILVA couldn't place below
-Kingdom at all).
+`aggregate_abundance.py --tables-dir`. First version of this script only
+ever wrote Genus, and only at species/genus tier — a family-tier hit
+(86.5-94.5% identity) isn't confident enough to name a genus, but IS
+confident enough to say what family (and therefore Order, Class, Phylum)
+the ASV belongs to, and that information was being thrown away entirely:
+37,638 sponge reads and 5,633 Nematostella reads had a family-tier-or-
+coarser hit contributing nothing to any output column. Fixed to backfill
+every rank at or above what each hit's tier actually supports (species/
+genus tier → Genus and above; family tier → Family and above; order tier →
+Order and above; etc.), looking up the full lineage for a resolved genus
+name directly from SILVA's own training-fasta headers — keeps rank naming
+consistent with the rest of the pipeline instead of introducing a second
+taxonomy source. Effect on the combined **genus**-rank abundance tables
+(unchanged by this fix, since family-tier-or-coarser hits correctly stay
+`Unclassified` at Genus rank — not confident enough to name one):
+**Unclassified 63.8% → 32.3% (sponge), 54.5% → 24.2% (Nematostella)** —
+including surfacing a previously-hidden dominant taxon, *Desulfuromusa*, at
+28.7% combined abundance in Nematostella (traced back to a single
+9,189-read ASV in V5-V8 that SILVA couldn't place below Kingdom at all).
+At **Family** rank, the same fix now gives a much more complete picture:
+`aggregate_abundance.py --rank Family` drops Unclassified to **11.4%
+(sponge), 11.6% (Nematostella)** — 88%+ of bacterial reads in both hosts
+now carry at least a family-level identity, using information that used to
+be discarded outright rather than partially reported.
 
 ## The actual lesson
 
