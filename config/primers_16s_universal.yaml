@@ -100,6 +100,8 @@ primer_pairs:
   V1V3:
     forward: [AGAGTTTGATCCTGGCTCAG, AGAGTTTGATCATGGCTCAG]
     reverse: [CGTCAGGCTTTCGCCCATTG, GGTCAGGCTTTCGCCCATTG, GATCAGGCTTTCGCCCATTG, CGTCAGGCTTGCGCCCATTG]
+    forward_name: "27F"
+    reverse_name: "520R"
     region: "8-534 (V1-V3)"
     span: [8, 534]  # [start, end] for programmatic overlap detection
     notes: "27F / 520R. Final yield (post-prefilter): 4.6% sponge / 22.4% Nematostella (worst-case 4.6%), 99/10 bacterial ASVs. Looked best under the ONE-read vsearch/OTU method; low yield once purity is normalized by prefiltering -- see file header. Not currently recommended."
@@ -107,6 +109,8 @@ primer_pairs:
   V3V4:
     forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
     reverse: [CTACCAGGGTATCTAATCCT]
+    forward_name: "341F"
+    reverse_name: "806R"
     region: "341-806 (V3-V4)"
     span: [341, 806]  # [start, end] for programmatic overlap detection
     notes: "341F / 806R. Final yield (post-prefilter): 54.7% sponge / 32.4% Nematostella (worst-case 32.4%), 431/26 bacterial ASVs. Best pick under the pre-prefilter ASV+SILVA round; now clearly third -- its Nematostella yield trails V4/V5V8 once purity is normalized across all 9 pairs by prefiltering."
@@ -114,6 +118,8 @@ primer_pairs:
   V3V6:
     forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
     reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    forward_name: "341F"
+    reverse_name: "926R"
     region: "341-926 (V3-V6)"
     span: [341, 926]  # [start, end] for programmatic overlap detection
     notes: "341F / 926R. Final yield (post-prefilter): 5.0% sponge / 0.08% Nematostella (worst-case 0.08%), 175/14 bacterial ASVs. AVOID for animal hosts -- 926R has strong predicted and observed cnidarian-mtDNA affinity; Nematostella yield stays near-zero even after the full fix, confirming a genuine primer-level problem, not a classifier artifact."
@@ -121,6 +127,8 @@ primer_pairs:
   V4:
     forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
     reverse: [CTACCAGGGTATCTAATCCT]
+    forward_name: "515F"
+    reverse_name: "806R"
     region: "515-806 (V4)"
     span: [515, 806]  # [start, end] for programmatic overlap detection
     notes: "515F / 806R. Final yield (post-prefilter): 61.4% sponge / 61.9% Nematostella (worst-case 61.4%), 789/46 bacterial ASVs -- CURRENT RECOMMENDED DEFAULT, best cross-host yield across all 9 pairs, consistent in both hosts. 806R has predicted affinity for Stichodactyla-type (anemone) mtDNA, so don't assume this generalizes to every cnidarian host."
@@ -128,6 +136,8 @@ primer_pairs:
   V4V6:
     forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
     reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    forward_name: "515F"
+    reverse_name: "926R"
     region: "515-926 (V4-V6)"
     span: [515, 926]  # [start, end] for programmatic overlap detection
     notes: "515F / 926R. Final yield (post-prefilter): 8.5% sponge / 0.09% Nematostella (worst-case 0.09%), 327/22 bacterial ASVs -- WORST amplicon of the 9 for animal hosts. 515F has ~100% predicted identity to cnidarian mtDNA; Nematostella yield stays near-zero even after the full fix."
@@ -135,6 +145,8 @@ primer_pairs:
   V5V8:
     forward: [MWACGCGMRGAACCTTACCW]
     reverse: [GACGGGCGGTGTGTACAAGG]
+    forward_name: "967F"
+    reverse_name: "1389R"
     region: "967-1389 (~V5-V8)"
     span: [967, 1389]  # [start, end] for programmatic overlap detection
     notes: "~967F / 1389R. Final yield (post-prefilter): 52.9% sponge / 74.9% Nematostella (worst-case 52.9%), 901/36 bacterial ASVs -- close second choice, highest single-host yield of any pair (Nematostella)."
@@ -142,6 +154,8 @@ primer_pairs:
   V6V8:
     forward: [ATGGCTGTCGTCAGCTCGTG]
     reverse: [GACGGGCGGTGTGTACAAGG]
+    forward_name: "1048F"
+    reverse_name: "1389R"
     region: "1048-1389 (V6-V8)"
     span: [1048, 1389]  # [start, end] for programmatic overlap detection
     notes: "1048F / 1389R. Final yield (post-prefilter): 7.5% sponge / 6.4% Nematostella (worst-case 6.4%), 632/19 bacterial ASVs."
@@ -149,6 +163,8 @@ primer_pairs:
   V6V9:
     forward: [ATGGCTGTCGTCAGCTCGTG]
     reverse: [TACCTTGTTACGACTTCGCT, TACCTTGTTACGACTTCATT]
+    forward_name: "1048F"
+    reverse_name: "1492R"
     region: "1048-1492 (V6-V9)"
     span: [1048, 1492]  # [start, end] for programmatic overlap detection
     notes: "1048F / 1492R. Final yield (post-prefilter): 5.0% sponge / 4.2% Nematostella (worst-case 4.2%), 74/6 bacterial ASVs."
@@ -207,6 +223,8 @@ primer_pairs:
   V7V8:
     forward: [GTAACGAGCGCAACCCTTGT, GCAACGAGCGCAACCCTTGT]
     reverse: [GACGGGCGGTGTGTACAAGG]
+    forward_name: "V7F"
+    reverse_name: "1389R"
     region: "1117-1389 (V7-V8)"
     span: [1117, 1389]  # [start, end] for programmatic overlap detection
     notes: "V7F / 1389R. Final yield (post-prefilter): 12.4% sponge / 5.4% Nematostella (worst-case 5.4%), 441/16 bacterial ASVs."
