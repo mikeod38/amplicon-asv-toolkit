@@ -620,6 +620,72 @@ this round adds sponge to that list at the raw-contamination level too,
 and identifies the mechanism (926R itself, not the amplicon length or the
 partner primer) as the actual cause.
 
+## Round 8: "Unclassified" is a misnomer, and Kingdom=NA hides real bacteria too
+
+Two related fixes, both found by asking a version of the same question
+that's run through every round: does a summary label mean what it says?
+
+**"Unclassified" almost never means "we know nothing."** Every combined
+genus-abundance table in this document reports an "Unclassified" bucket at
+whatever `--rank` was requested (Genus by default) -- a defensible
+convention if the rank is stated, but every summary of it in this document
+so far dropped that qualifier and just said "X% Unclassified," which reads
+as "we know nothing about most of this community." Checking what these
+ASVs are ACTUALLY resolved to (`python/resolution_depth_summary.py`,
+walking up Phylum→Class→Order→Family until it finds a real call) shows
+that's almost never true:
+
+| Host | Genus-"Unclassified" bucket | Resolves to Family+ | Resolves to *something* beyond Kingdom | Truly Kingdom-only |
+|---|---:|---:|---:|---:|
+| Sponge | 137,479 reads, 2,480 ASVs | 58.5% | 99.99% | 5 ASVs, 19 reads (0.01%) |
+| Nematostella | 20,589 reads, 104 ASVs | 87.8% | 91.2% | 5 ASVs, 1,816 reads (8.8%) |
+
+In sponge, essentially the entire "Unclassified" bucket has a real Family
+or Order identity -- SILVA's classifier just wasn't confident enough to
+commit to a specific genus. The correct headline is "62.6% Unclassified
+*at Genus*, but 99.99% of that resolves to Family or coarser" -- reporting
+the first number alone materially overstates how little is actually known
+about this community. Nematostella's smaller bucket is mostly the same
+story, though its Kingdom-only fraction (8.8%) is less negligible.
+
+**Separately: `flag_organellar.py`'s `organelle_type == "unclassified"`
+bucket (Kingdom=NA, excluded from bacterial abundance ENTIRELY, not just
+left coarsely resolved) has the same classifier-conservatism problem one
+level up.** Checked directly: of 4 sponge ASVs SILVA called Kingdom=NA at
+>=200 reads, 3 BLAST-matched at 92-100% identity to named, unambiguous
+bacterial genera (*Rhizobacter*, *Peredibacter*, and a
+Lachnospiraceae-affiliated lineage) -- real bacterial signal being
+silently discarded from the community picture entirely, not merely
+under-resolved. `python/rescue_unclassified_kingdom.py` BLASTs every
+Kingdom=NA ASV against SILVA's reference and reclassifies confident hits
+(family tier+, and the hit's own lineage must independently start with
+Bacteria/Archaea -- never assumed) as bacterial. Rolled out across the
+full panel, both hosts: every affected source table rescued
+**100% of its Kingdom=NA reads** except one -- V6V9's rev-half (~V9), where
+7/9 ASVs rescued (49 reads) but one single 11,533-read ASV got no hit
+anywhere and stayed correctly excluded.
+
+**That one real negative is the useful case, not a nuisance.** With
+essentially everything else in this pipeline now resolving to a plausible
+identity given enough looking, a high-abundance ASV that STILL gets zero
+hits against a comprehensive reference (organellar refs, general
+bacterial 16S, SILVA's full 452k-sequence database, all checked at 70%
+identity) is a much stronger signal than it would have been earlier in
+this project, when a "no hit" result was still fairly common and
+therefore uninformative on its own. **Standing practice going forward**:
+any high-abundance ASV that clears this bar -- genuinely no usable
+reference hit despite substantial read support -- gets flagged with a
+recommendation that whole-genome assembly or shotgun metagenomic
+sequencing is the appropriate follow-up. Amplicon BLAST against 16S
+reference databases has a hard ceiling here by construction: an organism
+with no sufficiently close reference simply cannot be identified this way,
+no matter how good the database or how many angles are tried. Only
+recovering more of that organism's own genomic context -- via shotgun
+sequencing and assembly, or targeted long-read sequencing of the specific
+template -- can meaningfully identify it beyond "abundant and
+16S-divergent." `rescue_unclassified_kingdom.py --flag-min-abundance`
+(default 500) automates this flagging for future runs.
+
 ## The actual lesson
 
 Not "V1-V3 is bad" or "trust SILVA over BLAST" — it's that **every
@@ -670,6 +736,22 @@ other round: stop trusting the number the pipeline hands you by default,
 and go check it against something the pipeline's own upstream steps
 haven't already touched. The 926R finding was sitting one filtering step
 upstream of where the pipeline was already looking.
+
+Round 8 is two more instances of the exact same move, at two different
+altitudes. The first is almost embarrassingly literal: "Unclassified" is a
+word, and words carry meaning beyond what a script's docstring intends --
+every reader of "63% Unclassified" who isn't also reading
+`aggregate_abundance.py`'s source will reasonably take it to mean
+"unknown," not "unknown at the specific rank I asked for, though usually
+known one rank up." The pipeline was never wrong; the reporting was
+imprecise in a way that compounded across every summary in this document
+until it was checked directly. The second is round 5's Genus=NA fix,
+applied one rank higher, to Kingdom=NA -- the same classifier-conservatism
+gap recurs at every rank boundary a naive-Bayes classifier has to commit
+to, not just the one it happened to get caught at first. Both fixes came
+from the same question, asked at a different scope: does this label mean
+what it says, and have I actually checked, or am I repeating what a
+default bucket told me?
 
 ## Reproducing
 
