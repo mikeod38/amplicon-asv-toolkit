@@ -548,7 +548,9 @@ wrong primer.
 both sort orientations and BLASTs them against the same sample-specific
 reference the prefilter uses, with no DADA2/SILVA step in between. This
 is the number that actually answers "does this primer pick up
-organellar DNA," unconfounded by reference-database coverage.
+organellar DNA," unconfounded by reference-database coverage. Full output
+(one row per primer/amplicon/role): `raw_contamination_by_primer_sponge.tsv`,
+`raw_contamination_by_primer_nematostella.tsv` (this directory).
 
 **Result: the raw picture is dramatically different from the post-prefilter
 one, and the effect that dominates it wasn't visible in the earlier table
