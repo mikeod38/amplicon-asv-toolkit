@@ -35,22 +35,40 @@ than a single pass/fail call, since "we can say what family this is" is
 still a real result even when species-level ID isn't possible.
 
 For split ASVs, the two halves' best hits are also checked for agreement
-at genus level. CAVEAT, confirmed on real data: genus-level disagreement
-here is common and usually does NOT mean a chimera -- a 27k-strain
-type-strain database has much sparser coverage than SILVA's full training
-set, so two genuinely non-chimeric halves of one real (but
+at genus AND phylum level. CAVEAT on genus-level disagreement, confirmed
+on real data: it's common and usually does NOT mean a chimera -- a
+27k-strain type-strain database has much sparser coverage than SILVA's
+full training set, so two genuinely non-chimeric halves of one real (but
 poorly-represented) organism can each independently BLAST-match a
 different, moderately-divergent "closest available" named relative (both
-in the 88-97% identity range, genus/family tier, not species tier). Before
-treating a disagreement here as chimera evidence, cross-check the same ASV
-against R/check_split_chimeras.R's SILVA-based Phylum-level call, which
-draws on a much larger reference and is the more reliable signal -- on one
-real amplicon, 14/15 genus-disagreeing ASVs by this script's count showed
-zero Phylum-level disagreements under check_split_chimeras.R.
+in the 88-97% identity range, genus/family tier, not species tier).
+PHYLUM-level disagreement is a materially stronger signal -- it is NOT
+expected from database sparsity alone (16S conservation is deep enough
+that a real organism's worst-case "closest available" match, even in a
+sparse database, is still usually the correct phylum) and should be
+reviewed individually rather than assumed benign. R/check_split_chimeras.R
+provides an independent, SILVA-classifier-based cross-check (naive-Bayes
+bootstrap confidence rather than a raw best-hit) for the same question.
+
+Recommended --blast-db: SILVA's OWN reference, built into a BLAST database
+(e.g. `gunzip -c silva_nr99_v138.1_train_set.fa.gz > silva.fasta &&
+makeblastdb -in silva.fasta -dbtype nucl -out silva_blastdb`), not just an
+NCBI type-strain set. This matters more than it looks: SILVA's
+assignTaxonomy() already had access to this same sequence pool and still
+returned NA for these ASVs -- but that's because assignTaxonomy() runs
+naive-Bayes kmer classification on the WHOLE (N-spacer-concatenated) ASV,
+which is a fundamentally more conservative method (requires bootstrap
+confidence across many kmers) than a direct best-hit alignment against
+each CLEAN split half separately, which is what this script does. On real
+data this recovered genus-tier identity for reads that only reached
+family tier against a smaller type-strain-only database. SILVA-style
+hit titles (semicolon-delimited full lineage) are parsed automatically;
+NCBI-style ("Genus species strain X...") titles work too, just without
+the phylum-agreement check (no lineage in the title itself).
 
 Usage:
   resolve_unclassified_bacteria.py --in dada2_final_v2/V5V8_bacterial.tsv \\
-      --blast-db blastdb/16S_ribosomal_RNA \\
+      --blast-db silva/blastdb/silva_nr99_v138.1 \\
       --out dada2_final_v2/V5V8_bacterial_resolved.tsv \\
       [--rank Genus] [--min-identity 75] [--min-coverage 70] [--threads 8]
 """
@@ -116,8 +134,26 @@ def blast_best_hits(seqs, blast_db, min_identity, min_coverage, threads):
 
 
 def genus_from_stitle(stitle):
-    """First whitespace-delimited token of a BLAST hit title is conventionally the genus."""
-    return stitle.split()[0] if stitle else None
+    """Genus from a BLAST hit title -- handles two reference-DB header conventions:
+    NCBI type-strain style ("Genus species strain X 16S ribosomal RNA...", genus is
+    the first whitespace token) and SILVA style ("Bacteria;Phylum;Class;Order;Family;
+    Genus;", semicolon-delimited full lineage, genus is the last non-empty field).
+    """
+    if not stitle:
+        return None
+    if ";" in stitle:
+        fields = [f for f in stitle.split(";") if f]
+        return fields[-1] if fields else None
+    return stitle.split()[0]
+
+
+def phylum_from_stitle(stitle):
+    """Phylum from a SILVA-style semicolon lineage hit title (Kingdom;Phylum;...).
+    Returns None for NCBI-style titles (no lineage available from the title alone)."""
+    if not stitle or ";" not in stitle:
+        return None
+    fields = stitle.split(";")
+    return fields[1] if len(fields) > 1 and fields[1] else None
 
 
 def main():
@@ -144,7 +180,8 @@ def main():
         reader = csv.DictReader(f, delimiter="\t")
         fieldnames = reader.fieldnames + [
             "left_blast_hit", "left_pident", "right_blast_hit", "right_pident",
-            "resolved_hit", "resolved_pident", "resolved_tier", "split_genus_agreement",
+            "resolved_hit", "resolved_pident", "resolved_tier",
+            "split_genus_agreement", "split_phylum_agreement",
         ]
         rows = list(reader)
 
@@ -193,6 +230,9 @@ def main():
         if lh and rh:
             lg, rg = genus_from_stitle(lh[1]), genus_from_stitle(rh[1])
             r["split_genus_agreement"] = "agree" if lg == rg else f"disagree ({lg} vs {rg})"
+            lp, rp = phylum_from_stitle(lh[1]), phylum_from_stitle(rh[1])
+            if lp and rp:
+                r["split_phylum_agreement"] = "agree" if lp == rp else f"disagree ({lp} vs {rp})"
 
     for r in whole:
         h = whole_hits.get(r["seq"])
@@ -221,6 +261,15 @@ def main():
         print(f"  {len(disagreements)} ASVs ({dis_reads:,} reads) have disagreeing left/right genus calls -- "
               f"usually reference-database sparsity, not chimeras (see docstring); cross-check against "
               f"R/check_split_chimeras.R's Phylum-level call (much broader reference) before concluding either way")
+
+    phylum_disagreements = [r for r in concatenated if str(r.get("split_phylum_agreement", "")).startswith("disagree")]
+    if phylum_disagreements:
+        pdis_reads = sum(int(r["abundance"]) for r in phylum_disagreements)
+        print(f"  ** {len(phylum_disagreements)} ASVs ({pdis_reads:,} reads) have disagreeing left/right PHYLUM "
+              f"calls -- unlike genus disagreement, this is NOT expected from database sparsity alone and is a "
+              f"much stronger chimera signal. Review these individually before trusting their resolved identity. **")
+        for r in phylum_disagreements:
+            print(f"      abundance={r['abundance']}: {r['split_phylum_agreement']}")
 
     for r in rows:
         r.pop("_left", None)
