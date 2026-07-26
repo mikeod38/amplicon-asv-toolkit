@@ -153,6 +153,57 @@ primer_pairs:
     span: [1048, 1492]  # [start, end] for programmatic overlap detection
     notes: "1048F / 1492R. Final yield (post-prefilter): 5.0% sponge / 4.2% Nematostella (worst-case 4.2%), 74/6 bacterial ASVs."
 
+  # ── Virtual sub-amplicons: R1-only / R2-only independent taxonomy for
+  #    V5V8, V6V8, V6V9 (run_dada2.R --split-amplicons). These aren't new
+  #    primer pairs -- each shares its parent amplicon's actual primers --
+  #    they exist so aggregate_abundance.py can region-cluster each read's
+  #    own variable-region coverage independently instead of only ever
+  #    seeing the (for these 3 amplicons, never-overlapping) whole-amplicon
+  #    span. Spans computed from primer position + ~150bp read length; see
+  #    examples/nematostella_pilot/README.md's chimera-detection section for
+  #    the confirmed per-read variable-region coverage this is based on.
+  V5V8_fwdhalf:
+    forward: [MWACGCGMRGAACCTTACCW]
+    reverse: [GACGGGCGGTGTGTACAAGG]
+    region: "967-1117 (V5V8, R1/forward-primer read only -- ~V6)"
+    span: [967, 1117]
+    notes: "Independent taxonomy for V5V8's forward-primer-proximal read (R1). See V5V8 for primer sequences; this entry exists only for region-overlap clustering."
+
+  V5V8_revhalf:
+    forward: [MWACGCGMRGAACCTTACCW]
+    reverse: [GACGGGCGGTGTGTACAAGG]
+    region: "1239-1389 (V5V8, R2/reverse-primer read only -- ~V8)"
+    span: [1239, 1389]
+    notes: "Independent taxonomy for V5V8's reverse-primer-proximal read (R2). See V5V8 for primer sequences; this entry exists only for region-overlap clustering."
+
+  V6V8_fwdhalf:
+    forward: [ATGGCTGTCGTCAGCTCGTG]
+    reverse: [GACGGGCGGTGTGTACAAGG]
+    region: "1048-1198 (V6V8, R1/forward-primer read only -- ~V7)"
+    span: [1048, 1198]
+    notes: "Independent taxonomy for V6V8's forward-primer-proximal read (R1). See V6V8 for primer sequences; this entry exists only for region-overlap clustering."
+
+  V6V8_revhalf:
+    forward: [ATGGCTGTCGTCAGCTCGTG]
+    reverse: [GACGGGCGGTGTGTACAAGG]
+    region: "1239-1389 (V6V8, R2/reverse-primer read only -- ~V8)"
+    span: [1239, 1389]
+    notes: "Independent taxonomy for V6V8's reverse-primer-proximal read (R2). See V6V8 for primer sequences; this entry exists only for region-overlap clustering."
+
+  V6V9_fwdhalf:
+    forward: [ATGGCTGTCGTCAGCTCGTG]
+    reverse: [TACCTTGTTACGACTTCGCT, TACCTTGTTACGACTTCATT]
+    region: "1048-1198 (V6V9, R1/forward-primer read only -- ~V7)"
+    span: [1048, 1198]
+    notes: "Independent taxonomy for V6V9's forward-primer-proximal read (R1). See V6V9 for primer sequences; this entry exists only for region-overlap clustering."
+
+  V6V9_revhalf:
+    forward: [ATGGCTGTCGTCAGCTCGTG]
+    reverse: [TACCTTGTTACGACTTCGCT, TACCTTGTTACGACTTCATT]
+    region: "1342-1492 (V6V9, R2/reverse-primer read only -- ~V9)"
+    span: [1342, 1492]
+    notes: "Independent taxonomy for V6V9's reverse-primer-proximal read (R2). See V6V9 for primer sequences; this entry exists only for region-overlap clustering."
+
   V7V8:
     forward: [GTAACGAGCGCAACCCTTGT, GCAACGAGCGCAACCCTTGT]
     reverse: [GACGGGCGGTGTGTACAAGG]

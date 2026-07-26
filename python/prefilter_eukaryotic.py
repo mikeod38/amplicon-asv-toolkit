@@ -24,9 +24,22 @@ mitogenome haplotype) or the contamination isn't what this filter targets.
 Method: dereplicate R1 and R2 independently (their sequences are compared
 separately -- this doesn't require reads to overlap or be the same length),
 BLAST each unique sequence against the reference database, and drop any
-READ PAIR where either mate matched. Paired mode: reads are always
-kept/dropped together to preserve the R1<->R2 correspondence run_dada2.R
-needs.
+READ PAIR where either mate matched. Paired mode (default): reads are
+always kept/dropped together to preserve the R1<->R2 correspondence
+run_dada2.R's concatenation path needs.
+
+--independent-mates mode (for run_dada2.R --split-amplicons): drops each
+mate independently instead of the whole pair -- keeps a clean R1 even if
+its R2 partner is organellar, and vice versa. This matters specifically
+for PCR chimeras between a real bacterial template and an organellar one:
+paired mode would discard the whole pair (losing the real bacterial half
+along with the contaminant), but for amplicons where R1 and R2 are
+independently valid single-variable-region measurements (see
+run_dada2.R's --split-amplicons), only the actually-contaminated mate
+needs to go. Output R1/R2 files will generally have DIFFERENT read counts
+and are no longer aligned pair-for-pair -- this is expected. Only use this
+mode with run_dada2.R's split-amplicon path, which filters/denoises R1 and
+R2 as independent single-end files rather than requiring them to match.
 
 Plastid references get their own, stricter identity threshold
 (--plastid-min-identity, default 96%) because a self-derived plastid
@@ -54,7 +67,7 @@ Usage:
       --out-r1 sorted_trimmed/V4V6_R1.filtered.fastq.gz \\
       --out-r2 sorted_trimmed/V4V6_R2.filtered.fastq.gz \\
       [--min-identity 85] [--min-coverage 70] \\
-      [--plastid-min-identity 96] [--threads 8]
+      [--plastid-min-identity 96] [--independent-mates] [--threads 8]
 
 Building the reference database:
   cat host_mitogenome.fasta symbiont_refs.fasta > refs.fasta
@@ -157,13 +170,17 @@ def main():
                           "references specifically (default 96) -- plastids are "
                           "cyanobacteria-derived, so the default --min-identity is loose "
                           "enough to also catch genuine free-living cyanobacteria")
+    ap.add_argument("--independent-mates", action="store_true",
+                     help="Drop each mate independently instead of the whole pair when "
+                          "either matches -- see docstring. Output files are no longer "
+                          "count-matched; only use with run_dada2.R --split-amplicons.")
     ap.add_argument("--threads", type=int, default=8)
     args = ap.parse_args()
 
     r1_records, r1_derep = dereplicate(args.r1)
     r2_records, r2_derep = dereplicate(args.r2)
     n_pairs = len(r1_records)
-    if len(r2_records) != n_pairs:
+    if not args.independent_mates and len(r2_records) != n_pairs:
         sys.exit(f"R1 ({n_pairs}) and R2 ({len(r2_records)}) read counts differ -- not a matched pair")
 
     r1_uniques = list(r1_derep.keys())
@@ -175,19 +192,37 @@ def main():
     r2_hit_idx = blast_matches(r2_uniques, args.ref_db, args.min_identity, args.min_coverage,
                                 args.plastid_min_identity, args.threads)
 
-    contaminated_records = set()
+    r1_contaminated = set()
     for ui in r1_hit_idx:
-        contaminated_records.update(r1_derep[r1_uniques[ui]])
+        r1_contaminated.update(r1_derep[r1_uniques[ui]])
+    r2_contaminated = set()
     for ui in r2_hit_idx:
-        contaminated_records.update(r2_derep[r2_uniques[ui]])
+        r2_contaminated.update(r2_derep[r2_uniques[ui]])
 
-    keep = [i for i in range(n_pairs) if i not in contaminated_records]
-    write_fastq(args.out_r1, r1_records, keep)
-    write_fastq(args.out_r2, r2_records, keep)
+    if args.independent_mates:
+        r1_keep = [i for i in range(len(r1_records)) if i not in r1_contaminated]
+        r2_keep = [i for i in range(len(r2_records)) if i not in r2_contaminated]
+        write_fastq(args.out_r1, r1_records, r1_keep)
+        write_fastq(args.out_r2, r2_records, r2_keep)
 
-    n_removed = n_pairs - len(keep)
-    print(f"Removed {n_removed:,}/{n_pairs:,} pairs ({100*n_removed/n_pairs:.1f}%) matching the reference database")
-    print(f"Kept {len(keep):,} pairs -> {args.out_r1}, {args.out_r2}")
+        both_contaminated = r1_contaminated & r2_contaminated
+        r1_only = r1_contaminated - r2_contaminated
+        r2_only = r2_contaminated - r1_contaminated
+        print(f"Removed {len(r1_contaminated):,} R1 reads, {len(r2_contaminated):,} R2 reads "
+              f"(independent mates -- {len(both_contaminated):,} pairs had both mates contaminated, "
+              f"{len(r1_only):,} had only R1, {len(r2_only):,} had only R2 -- those {len(r1_only)+len(r2_only):,} "
+              f"reads' clean mate is recovered, not discarded)")
+        print(f"Kept {len(r1_keep):,}/{n_pairs:,} R1 reads -> {args.out_r1}")
+        print(f"Kept {len(r2_keep):,}/{n_pairs:,} R2 reads -> {args.out_r2}")
+    else:
+        contaminated_records = r1_contaminated | r2_contaminated
+        keep = [i for i in range(n_pairs) if i not in contaminated_records]
+        write_fastq(args.out_r1, r1_records, keep)
+        write_fastq(args.out_r2, r2_records, keep)
+
+        n_removed = n_pairs - len(keep)
+        print(f"Removed {n_removed:,}/{n_pairs:,} pairs ({100*n_removed/n_pairs:.1f}%) matching the reference database")
+        print(f"Kept {len(keep):,} pairs -> {args.out_r1}, {args.out_r2}")
 
 
 if __name__ == "__main__":

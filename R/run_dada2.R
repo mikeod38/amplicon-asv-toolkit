@@ -49,9 +49,36 @@
 #    limitation, not a bug: exact species matching against a spacer-joined,
 #    non-contiguous sequence isn't meaningful anyway.
 #
+# 4. --split-amplicons: for amplicons where R1/R2 don't overlap AND the
+#    unsequenced gap between them falls cleanly between/within variable
+#    regions -- not clipping into either read's own region -- concatenation
+#    is actively harmful, not just uninformative. Confirmed on real primer
+#    spans (E. coli 16S numbering): V5-V8's R1 fully covers V6, R2 fully
+#    covers V8, and V7 falls entirely in the gap; V6-V8's R1=V7, R2=V8 with
+#    only a 41bp linker gap; V6-V9's R1=V7, R2=V9, gap=V8 whole. Each read
+#    is a complete, single-organism observation of its own variable region
+#    -- a PCR chimera whose crossover lands in the gap (the ONLY kind of
+#    chimera the N-spacer-concatenated form can even be checked for, see
+#    python/check_split_chimeras.R and python/resolve_unclassified_bacteria.py's
+#    phylum-agreement check) doesn't corrupt either read, it only creates a
+#    false LINKAGE claiming both reads came from the same organism. Listing
+#    an amplicon here skips merge_hybrid() (and therefore concatenation)
+#    entirely: ddF and ddR (already denoised separately, before any merge
+#    decision) are each independently taken through to assignTaxonomy as
+#    their own virtual amplicon (<amp>_fwdhalf / <amp>_revhalf), pooled
+#    across orientations the same way a normal amplicon pools fwd+rev. This
+#    also means every resulting sequence is N-free -- addSpecies works on
+#    100% of these ASVs, not just the true-overlap-merged subset. Amplicons
+#    NOT listed here keep the existing merge_hybrid() path unchanged --
+#    either because reads already true-merge (V4, V7-V8), or because the
+#    gap clips into the edge of a variable region rather than falling
+#    cleanly outside both reads (V3-V4, V3-V6, V4-V6), where a clean
+#    per-read region assignment isn't available.
+#
 # Usage:
 #   Rscript run_dada2.R --sorted-dir sorted/ \
 #       --amplicons V1V3,V7V8,V6V8,V5V8,V6V9 \
+#       --split-amplicons V5V8,V6V8,V6V9 \
 #       --outdir dada2/ \
 #       --silva-train silva/silva_nr99_v138.1_train_set.fa.gz \
 #       --silva-species silva/silva_species_assignment_v138.1.fa.gz \
@@ -65,13 +92,14 @@
 suppressMessages(library(dada2))
 
 parse_args <- function(args) {
-  opt <- list(threads = 8, max_ee = c(2, 2), trunc_q = 2)
+  opt <- list(threads = 8, max_ee = c(2, 2), trunc_q = 2, split_amplicons = character(0))
   i <- 1
   while (i <= length(args)) {
     key <- args[i]
     val <- if (i < length(args)) args[i + 1] else NA
     if (key == "--sorted-dir") opt$sorted_dir <- val
     else if (key == "--amplicons") opt$amplicons <- strsplit(val, ",")[[1]]
+    else if (key == "--split-amplicons") opt$split_amplicons <- strsplit(val, ",")[[1]]
     else if (key == "--outdir") opt$outdir <- val
     else if (key == "--silva-train") opt$silva_train <- val
     else if (key == "--silva-species") opt$silva_species <- val
@@ -154,10 +182,100 @@ process_orientation <- function(amp, f_path, r_path, tag, outdir, threads, max_e
   merge_hybrid(ddF, filt_f, ddR, filt_r, amp, tag)
 }
 
+# ── Split-amplicon path: filter, learn errors, and denoise F and R as
+#    INDEPENDENT single-end files, not a matched pair -- required for
+#    compatibility with prefilter_eukaryotic.py --independent-mates, which
+#    drops each mate separately on an organellar hit (so a PCR chimera
+#    between real bacterial DNA and host/algal DNA loses only the
+#    contaminated mate, not its clean partner too) and therefore produces
+#    R1/R2 files with different read counts and no positional
+#    correspondence. Returns list(ddF=..., ddR=...), either of which may be
+#    NULL if that mate had no usable reads -- the caller handles each
+#    independently, so one mate's dropout doesn't lose the other's data. ──
+process_split_mate <- function(amp, path, tag, mate, outdir, threads, max_ee, trunc_q) {
+  filt_dir <- file.path(outdir, "filtered", amp)
+  dir.create(filt_dir, showWarnings = FALSE, recursive = TRUE)
+  filt_path <- file.path(filt_dir, paste0(tag, "_", mate, "_filt.fastq.gz"))
+
+  if (!file.exists(path)) return(NULL)
+  n_reads <- length(ShortRead::readFastq(path))
+  if (n_reads < 10) {
+    cat(sprintf("  [%s/%s/%s] only %d reads, skipping\n", amp, tag, mate, n_reads))
+    return(NULL)
+  }
+
+  filterAndTrim(path, filt_path,
+                truncLen = 0, maxN = 0, maxEE = max_ee[1],
+                truncQ = trunc_q, rm.phix = TRUE, compress = TRUE,
+                multithread = threads, verbose = TRUE)
+  if (!file.exists(filt_path) || file.info(filt_path)$size == 0) return(NULL)
+
+  err <- learnErrors(filt_path, multithread = threads, verbose = 0)
+  dada(filt_path, err = err, multithread = threads, verbose = 0)
+}
+
+process_split_orientation <- function(amp, f_path, r_path, tag, outdir, threads, max_ee, trunc_q) {
+  ddF <- process_split_mate(amp, f_path, tag, "F", outdir, threads, max_ee, trunc_q)
+  ddR <- process_split_mate(amp, r_path, tag, "R", outdir, threads, max_ee, trunc_q)
+  if (is.null(ddF) && is.null(ddR)) return(NULL)
+  list(ddF = ddF, ddR = ddR)
+}
+
+# Single-end sequence table from one dada object, same 1-row-matrix shape
+# merge_hybrid() produces, so it drops into the same downstream pooling
+# (mergeSequenceTables, collapseNoMismatch, removeBimeraDenovo) unchanged.
+single_end_seqtab <- function(dd, amp, tag) {
+  uniq <- getUniques(dd)
+  matrix(uniq, nrow = 1, dimnames = list(paste0(amp, "_", tag), names(uniq)))
+}
+
 all_seqtabs <- list()
 for (amp in opt$amplicons) {
   cat(sprintf("\n=== %s ===\n", amp))
   sd <- opt$sorted_dir
+
+  if (amp %in% opt$split_amplicons) {
+    # ── Split path: no concatenation. ddF (forward-primer-proximal read,
+    #    whichever orientation it came from) and ddR (reverse-primer-
+    #    proximal read) are pooled across orientations SEPARATELY into two
+    #    independent virtual amplicons, each carried through chimera
+    #    removal and taxonomy on its own. ──────────────────────────────
+    fwd <- process_split_orientation(amp,
+                                      file.path(sd, paste0(amp, "_R1.fastq.gz")),
+                                      file.path(sd, paste0(amp, "_R2.fastq.gz")),
+                                      "fwd", opt$outdir, opt$threads, opt$max_ee, opt$trunc_q)
+    rev <- process_split_orientation(amp,
+                                      file.path(sd, paste0(amp, "_rev_R2.fastq.gz")),
+                                      file.path(sd, paste0(amp, "_rev_R1.fastq.gz")),
+                                      "rev", opt$outdir, opt$threads, opt$max_ee, opt$trunc_q)
+
+    for (half in c("fwdhalf", "revhalf")) {
+      dd_key <- if (half == "fwdhalf") "ddF" else "ddR"
+      half_tabs <- list()
+      if (!is.null(fwd) && !is.null(fwd[[dd_key]])) half_tabs[[length(half_tabs) + 1]] <- single_end_seqtab(fwd[[dd_key]], amp, paste0(half, "_fwd"))
+      if (!is.null(rev) && !is.null(rev[[dd_key]])) half_tabs[[length(half_tabs) + 1]] <- single_end_seqtab(rev[[dd_key]], amp, paste0(half, "_rev"))
+      if (length(half_tabs) == 0) {
+        cat(sprintf("  [%s/%s] no usable orientation, skipping\n", amp, half))
+        next
+      }
+
+      half_seqtab <- if (length(half_tabs) == 2) mergeSequenceTables(half_tabs[[1]], half_tabs[[2]]) else half_tabs[[1]]
+      half_seqtab <- collapseNoMismatch(half_seqtab)
+      half_seqtab_nochim <- removeBimeraDenovo(half_seqtab, method = "consensus",
+                                                multithread = opt$threads, verbose = TRUE)
+
+      half_name <- paste0(amp, "_", half)
+      cat(sprintf("  [%s] ASVs before/after chimera removal: %d / %d\n",
+                  half_name, ncol(half_seqtab), ncol(half_seqtab_nochim)))
+      cat(sprintf("  [%s] reads retained: %d / %d (%.1f%%)\n",
+                  half_name, sum(half_seqtab_nochim), sum(half_seqtab),
+                  100 * sum(half_seqtab_nochim) / sum(half_seqtab)))
+
+      saveRDS(half_seqtab_nochim, file.path(opt$outdir, paste0(half_name, "_seqtab.rds")))
+      all_seqtabs[[half_name]] <- half_seqtab_nochim
+    }
+    next
+  }
 
   # forward sort: F=R1 (fwd primer), R=R2 (rev primer) -- matched pairs
   fwd <- process_orientation(amp,
