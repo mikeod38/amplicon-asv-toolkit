@@ -532,6 +532,92 @@ per host, mixing the 6 still-concatenated amplicons with the 6 new split
 virtual amplicons) is current as of this writing but the downstream
 documentation/artifact refresh is pending.
 
+## Round 7: raw (pre-prefilter) contamination rate, per primer
+
+Round 6's per-*region* contamination table (pooling every read that
+measures a given variable region) surfaced a question that table alone
+couldn't answer: with the sample-specific BLAST prefilter already removing
+most contamination before DADA2 ever runs, is a region/primer's *residual*
+(post-prefilter) rate telling us about the primer, or about how well our
+reference database happens to cover whatever that primer picks up? The
+two are very different questions, and conflating them can point at the
+wrong primer.
+
+**Test**: measure contamination directly on raw, pre-prefilter reads --
+`python/raw_contamination_by_primer.py` pools each primer's reads across
+both sort orientations and BLASTs them against the same sample-specific
+reference the prefilter uses, with no DADA2/SILVA step in between. This
+is the number that actually answers "does this primer pick up
+organellar DNA," unconfounded by reference-database coverage.
+
+**Result: the raw picture is dramatically different from the post-prefilter
+one, and the effect that dominates it wasn't visible in the earlier table
+at all.**
+
+| Primer | Partner (amplicon) | Sponge | Nematostella |
+|---|---|---:|---:|
+| **926R** | 515F (V4-V6) | 84.6% | **99.8%** |
+| **515F** | 926R (V4-V6) | 80.9% | **99.8%** |
+| **341F** | 926R (V3-V6) | 83.4% | **99.7%** |
+| **926R** | 341F (V3-V6) | 85.2% | **99.7%** |
+| 1048F | 1389R (V6-V9) | 93.5% | 17.0% |
+| 1048F | 1389R (V6-V8) | 90.6% | 14.2% |
+| V7F | 1389R (V7-V8) | 84.8% | 20.3% |
+| 520R | 27F (V1-V3) | 83.7% | 39.3% |
+| 1389R | V7F (V7-V8) | 78.8% | 2.5% |
+| 1389R | 1048F (V6-V8) | 77.9% | 6.2% |
+| 27F | 520R (V1-V3) | 54.8% | 0.0% |
+| 1492R | 1048F (V6-V9) | 39.4% | 4.9% |
+| 967F | 1389R (V5-V8) | 33.3% | 8.5% |
+| 341F | 806R (V3-V4) | 31.8% | 13.6% |
+| 1389R | 967F (V5-V8) | 30.3% | 9.9% |
+| 515F | 806R (V4) | 26.6% | 18.9% |
+| 806R | 515F (V4) | 17.1% | 24.2% |
+| 806R | 341F (V3-V4) | 12.1% | 19.6% |
+
+**926R is unambiguously the worst primer in the panel, and it acts as a
+"hub": pairing with it drives contamination to 80-99.8% regardless of
+which forward primer succeeds in the same reaction.** Both 515F+926R and
+341F+926R -- two completely different forward primers -- hit ~80-85%
+(sponge) and ~99.7-99.8% (Nematostella) when paired with 926R
+specifically. The same forward primers paired with 806R instead (515F:
+17-27%; 341F: 12-32%) are dramatically cleaner. This means the earlier
+"515F is a bad primer" conclusion (from the original mechanistic
+off-target prediction, early in this project) was half right for the
+wrong reason: 515F itself is only moderately dirty (17-27%, comparable to
+341F and 806R); **the real problem is the 515F+926R combination
+specifically** -- consistent with real host/symbiont organellar genomes
+carrying binding sites for both primers close together, so that specific
+pairing selectively captures intact organellar molecules regardless of
+which forward primer got there first.
+
+**This replicates cleanly across two biologically very different hosts**
+(freshwater sponge, dominant contaminant an algal photosymbiont plastid;
+cnidarian, dominant contaminant animal host mitochondria) -- which is
+actually stronger evidence for a genuine 926R binding-site problem than
+either host alone would be, since the two hosts' actual contaminant
+sequences are unrelated. A structural/binding-site explanation that only
+worked for one specific organellar genome wouldn't be expected to
+generalize this cleanly.
+
+**Host-specific divergence is real too, for a different reason**: 1048F,
+V7F, and 1389R are severely dirty in sponge (78-94%) but comparatively
+mild in Nematostella (2-20%). Sponge's contamination mode (algal plastid)
+is a high-copy organelle present in enormous abundance per cell, plausibly
+co-amplifying with a much broader range of primer sites simply from sheer
+template abundance; Nematostella's (host mitochondria) is lower-copy and
+apparently only has strong affinity for specific sites (515F, 926R, 520R),
+leaving 1048F/V7F/1389R comparatively unaffected.
+
+**Practical implication for future panel design: drop 926R entirely.**
+It is the single most damaging element in this 9-primer panel, and unlike
+the host-specific effects above, its damage is not confined to one host
+type. Every amplicon in this panel that includes 926R (V3-V6, V4-V6) was
+already flagged as unusable for animal hosts by yield alone (Round 4);
+this round adds sponge to that list at the raw-contamination level too,
+and identifies the mechanism (926R itself, not the amplicon length or the
+partner primer) as the actual cause.
+
 ## The actual lesson
 
 Not "V1-V3 is bad" or "trust SILVA over BLAST" — it's that **every
@@ -570,6 +656,18 @@ claims; the phylum-level split-agreement check (and the willingness to
 re-derive a headline percentage that was already published across a
 README and four artifacts, rather than defend it) is what separated them
 here.
+
+Round 7 is the same instinct once more, aimed at the measurement itself
+rather than the classifier: after building an aggressive, effective
+sample-specific prefilter (Round 4) and then a per-region residual-
+contamination view on top of it (Round 6), it was tempting to read that
+residual as "how dirty is this primer." It measures something real, but
+not that -- it measures how much escaped a reference database whose
+coverage varies primer-by-primer. The fix was the same move as every
+other round: stop trusting the number the pipeline hands you by default,
+and go check it against something the pipeline's own upstream steps
+haven't already touched. The 926R finding was sitting one filtering step
+upstream of where the pipeline was already looking.
 
 ## Reproducing
 

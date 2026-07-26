@@ -122,7 +122,7 @@ primer_pairs:
     reverse_name: "926R"
     region: "341-926 (V3-V6)"
     span: [341, 926]  # [start, end] for programmatic overlap detection
-    notes: "341F / 926R. Final yield (post-prefilter): 5.0% sponge / 0.08% Nematostella (worst-case 0.08%), 175/14 bacterial ASVs. AVOID for animal hosts -- 926R has strong predicted and observed cnidarian-mtDNA affinity; Nematostella yield stays near-zero even after the full fix, confirming a genuine primer-level problem, not a classifier artifact."
+    notes: "341F / 926R. Final yield (post-prefilter): 5.0% sponge / 0.08% Nematostella (worst-case 0.08%), 175/14 bacterial ASVs. AVOID IN BOTH HOSTS -- raw (pre-prefilter) contamination for 926R paired with 341F is 85.2% sponge / 99.7% Nematostella (python/raw_contamination_by_primer.py); 926R acts as a contamination 'hub' that drives any successfully-paired forward primer to 80-99.8% raw contamination in both hosts tested. Not a Nematostella-specific or classifier-artifact problem -- drop 926R from future panels entirely."
 
   V4:
     forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
@@ -140,7 +140,7 @@ primer_pairs:
     reverse_name: "926R"
     region: "515-926 (V4-V6)"
     span: [515, 926]  # [start, end] for programmatic overlap detection
-    notes: "515F / 926R. Final yield (post-prefilter): 8.5% sponge / 0.09% Nematostella (worst-case 0.09%), 327/22 bacterial ASVs -- WORST amplicon of the 9 for animal hosts. 515F has ~100% predicted identity to cnidarian mtDNA; Nematostella yield stays near-zero even after the full fix."
+    notes: "515F / 926R. Final yield (post-prefilter): 8.5% sponge / 0.09% Nematostella (worst-case 0.09%), 327/22 bacterial ASVs -- WORST amplicon of the 9 in both hosts, and now confirmed why: raw contamination for 926R paired with 515F is 84.6% sponge / 99.8% Nematostella, essentially identical to 926R's rate paired with 341F (V3V6). The problem is 926R itself, not 515F specifically -- 515F alone (paired with 806R, see V4 entry) only runs 17-27% raw contamination, comparable to other moderate primers in this panel."
 
   V5V8:
     forward: [MWACGCGMRGAACCTTACCW]
