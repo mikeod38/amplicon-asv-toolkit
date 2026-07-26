@@ -450,6 +450,88 @@ higher-false-positive-tolerant method (e.g. family- or genus-level
 split-agreement as a weaker secondary signal, manually reviewed rather
 than auto-excluded).
 
+## Round 6: stop concatenating where the gap doesn't clip a variable region
+
+A structural question motivated this round: given every detectable
+chimera (by construction, via `merge_hybrid()`'s N-spacer fallback) has
+its breakpoint in the *unsequenced gap* between R1 and R2, does that gap
+consistently fall on real biological structure -- specifically, does it
+sit between two complete variable regions rather than inside one? If so,
+each read is a complete, single-organism observation of its own region
+regardless of what its mate is, and discarding the whole ASV on a chimera
+call throws away real signal from the intact half.
+
+Checked directly against primer spans + ~150bp read length vs. published
+*E. coli* 16S variable-region boundaries:
+
+| Amplicon | R1 covers | R2 covers | Unsequenced gap |
+|---|---|---|---|
+| V5-V8 | V6 (complete) | V8 (complete) | V7, entirely |
+| V6-V8 | V7 (complete) | V8 (complete) | 41bp linker only |
+| V6-V9 | V7 (complete) | V9 (complete) | V8, entirely |
+
+Confirmed for all three: each read is a complete, intact single-region
+measurement. (V3-V4/V3-V6/V4-V6 don't qualify -- their gaps clip into the
+*edge* of a region rather than falling cleanly outside both reads; V4 and
+V7-V8 already true-merge and were never affected.)
+
+**Fix**: `run_dada2.R --split-amplicons` skips `merge_hybrid()` entirely
+for qualifying amplicons. `ddF`/`ddR` (already denoised independently,
+before any merge decision) are pooled across orientations and carried to
+`assignTaxonomy` as two separate virtual amplicons
+(`<amp>_fwdhalf`/`<amp>_revhalf`) instead of being concatenated. Bonus:
+every resulting sequence is N-free, so `addSpecies` now runs on 100% of
+ASVs for these amplicons, not just the true-overlap-merged subset.
+`config/primers_16s_universal.yaml` gets 6 new span-only entries so
+`aggregate_abundance.py`'s region-overlap clustering treats each read's
+own coverage correctly -- concretely, V6V8_fwdhalf and V6V9_fwdhalf (both
+~V7) now correctly cluster as redundant measurements of the same region,
+and V5V8_revhalf/V6V8_revhalf cluster with V7-V8 as three independent V8
+measurements -- none of which was visible when these existed only as
+whole, non-overlapping concatenated amplicons treated as a single blended
+"back region."
+
+**The organellar-contamination angle, addressed together since it
+interacts directly**: `prefilter_eukaryotic.py` was dropping the *whole*
+read pair whenever either mate matched the organellar reference -- for a
+PCR chimera between real bacterial DNA and host/algal DNA, that discards
+the genuinely bacterial mate along with the contaminant. `--independent-mates`
+drops each mate separately instead. This required decoupling quality
+filtering too (paired `filterAndTrim` needs matched read counts, which
+breaks once mates are dropped independently) -- the split path now
+filters each mate as its own single-end file. Verified on real data:
+sponge V6-V9 alone recovered 11,386 reads this way (a pair where R1 was
+organellar but R2 was clean bacterial signal, previously discarded
+entirely).
+
+**Two findings from re-running the full pipeline with this in place:**
+
+1. *Desulfuromusa* reappears at 11.5% combined abundance in Nematostella
+   -- and this is correct, not a regression back to the round-5-continued
+   chimera. The confirmed-chimera ASV's V8-half (which BLASTed to
+   *Desulfuromusa* at 97.7% identity) is now independently and correctly
+   recovered as real V8-region signal, without also falsely claiming its
+   former V6-half partner (which only reached family-tier confidence
+   against Spirochaetaceae, 92.4%, and still shows 70% Unclassified as
+   its own standalone measurement) belongs to the same organism. The split
+   approach separates exactly what the concatenated form wrongly fused: a
+   real V8 observation and a separate, less-resolved V6 observation, not
+   one chimeric "Desulfuromusa" identity.
+
+2. **A large, genuinely unidentified sequence** dominates sponge's V6-V9
+   rev-half (V9 region): a single 11,533-read ASV with **zero BLAST hits**
+   against the organellar reference, the general bacterial 16S database,
+   or SILVA's full 452k-sequence reference, even at a loose 70% identity
+   floor. Base composition is unremarkable (not a homopolymer/low-complexity
+   artifact). This is a distinct, still-open finding -- not resolved by
+   this round, under manual investigation.
+
+**Combined-genus abundance is not yet re-published in artifacts or the
+tables further below** -- this round's pipeline output (`dada2_v5_final/`
+per host, mixing the 6 still-concatenated amplicons with the 6 new split
+virtual amplicons) is current as of this writing but the downstream
+documentation/artifact refresh is pending.
+
 ## The actual lesson
 
 Not "V1-V3 is bad" or "trust SILVA over BLAST" — it's that **every
