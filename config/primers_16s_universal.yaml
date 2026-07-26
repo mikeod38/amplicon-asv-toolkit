@@ -220,6 +220,66 @@ primer_pairs:
     span: [1342, 1492]
     notes: "Independent taxonomy for V6V9's reverse-primer-proximal read (R2). See V6V9 for primer sequences; this entry exists only for region-overlap clustering."
 
+  # V1V3/V3V4/V3V6/V4V6 split halves, added in round 6/8 to cover the
+  # remaining amplicons whose gap clips a region's edge (see run_dada2.R's
+  # --split-amplicons docstring) -- needed for region-overlap clustering
+  # once these are also processed as independent single-end reads.
+  V1V3_fwdhalf:
+    forward: [AGAGTTTGATCCTGGCTCAG, AGAGTTTGATCATGGCTCAG]
+    reverse: [CGTCAGGCTTTCGCCCATTG, GGTCAGGCTTTCGCCCATTG, GATCAGGCTTTCGCCCATTG, CGTCAGGCTTGCGCCCATTG]
+    region: "8-158 (V1V3, R1/27F only -- full V1, partial V2)"
+    span: [8, 158]
+    notes: "Independent taxonomy for V1V3's forward-primer-proximal read (R1, 27F). See V1V3 for primer sequences."
+
+  V1V3_revhalf:
+    forward: [AGAGTTTGATCCTGGCTCAG, AGAGTTTGATCATGGCTCAG]
+    reverse: [CGTCAGGCTTTCGCCCATTG, GGTCAGGCTTTCGCCCATTG, GATCAGGCTTTCGCCCATTG, CGTCAGGCTTGCGCCCATTG]
+    region: "384-534 (V1V3, R2/520R only -- full V3)"
+    span: [384, 534]
+    notes: "Independent taxonomy for V1V3's reverse-primer-proximal read (R2, 520R). See V1V3 for primer sequences."
+
+  V3V4_fwdhalf:
+    forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
+    reverse: [CTACCAGGGTATCTAATCCT]
+    region: "341-491 (V3V4, R1/341F only -- partial V3)"
+    span: [341, 491]
+    notes: "Independent taxonomy for V3V4's forward-primer-proximal read (R1, 341F). See V3V4 for primer sequences."
+
+  V3V4_revhalf:
+    forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
+    reverse: [CTACCAGGGTATCTAATCCT]
+    region: "656-806 (V3V4, R2/806R only -- partial V4)"
+    span: [656, 806]
+    notes: "Independent taxonomy for V3V4's reverse-primer-proximal read (R2, 806R). See V3V4 for primer sequences."
+
+  V3V6_fwdhalf:
+    forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
+    reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    region: "341-491 (V3V6, R1/341F only -- partial V3)"
+    span: [341, 491]
+    notes: "Independent taxonomy for V3V6's forward-primer-proximal read (R1, 341F). See V3V6 for primer sequences."
+
+  V3V6_revhalf:
+    forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
+    reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    region: "776-926 (V3V6, R2/926R only -- full V5)"
+    span: [776, 926]
+    notes: "Independent taxonomy for V3V6's reverse-primer-proximal read (R2, 926R). See V3V6 for primer sequences."
+
+  V4V6_fwdhalf:
+    forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
+    reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    region: "515-665 (V4V6, R1/515F only -- partial V4)"
+    span: [515, 665]
+    notes: "Independent taxonomy for V4V6's forward-primer-proximal read (R1, 515F). See V4V6 for primer sequences."
+
+  V4V6_revhalf:
+    forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
+    reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    region: "776-926 (V4V6, R2/926R only -- full V5)"
+    span: [776, 926]
+    notes: "Independent taxonomy for V4V6's reverse-primer-proximal read (R2, 926R). See V4V6 for primer sequences."
+
   V7V8:
     forward: [GTAACGAGCGCAACCCTTGT, GCAACGAGCGCAACCCTTGT]
     reverse: [GACGGGCGGTGTGTACAAGG]
