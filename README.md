@@ -3,269 +3,348 @@
 Tools for pooled, multi-primer 16S rRNA amplicon libraries: primer sorting,
 ASV inference (DADA2, using **both** reads of a pair even when the amplicon
 is too long to overlap), SILVA taxonomy, organellar (plastid/mitochondrial)
-flagging, and taxonomically-honest comparison across amplicons that don't
-share any gene positions.
+contamination removal, and taxonomically-honest comparison across amplicons
+that don't share any gene positions.
 
-## Why this exists
+This page is a standalone install-and-run guide. For the *why* behind each
+design decision (including the mistakes that motivated them, found across
+two real projects), see `examples/nematostella_pilot/README.md` — that
+document is a narrative case study, not required reading to use the
+toolkit.
 
-Built out of two related 16S projects: a freshwater sponge with a heavy
-**plastid** (algal photosymbiont) contamination problem, and a
-*Nematostella* (cnidarian) sample with a heavy **host mitochondrial**
-contamination problem. Both used the same pooled, non-directional,
-9-primer-pair library design (`config/primers_16s_universal.yaml`). Three
-problems came up that are generic to this kind of design, not specific to
-either sample, which is why this became its own toolkit rather than staying
-inside either project:
+## Prerequisites
 
-1. **Non-overlapping amplicons can't be compared by sequence.** V1-V3
-   (positions 8-534 of the *E. coli* 16S gene) and the 1389R-paired
-   amplicons (positions ~967-1492) share zero gene positions. Two OTUs/ASVs
-   from these regions can never cluster together at any identity threshold,
-   *regardless of whether they came from the same organism*. The only valid
-   comparison is at the taxonomy level (`compare_amplicons.py`), and even
-   then, amplicons differ in how deep they resolve any given ASV — see next
-   point.
-
-2. **Resolution-level mismatches hide real overlap.** If one amplicon
-   resolves an ASV to genus and another only resolves the same organism to
-   family (weaker discriminating power in that gene region, or a more
-   divergent local reference), a naive genus-only comparison scores that as
-   "no overlap" — a resolution artifact, not biology.
-   `compare_amplicons.py --rank family` (or any single common rank)
-   normalizes both sides before comparing. In the *Nematostella* pilot this
-   took shared-taxa counts from 6/~80 (naive genus, BLAST-based) to 10/13
-   vs 44 at genus and 16/19 vs 36 at family (ASV+SILVA, both reads used) —
-   most of the "no overlap" was resolution, not biology.
-
-3. **Discarding one read of a non-overlapping pair wastes half the
-   sequencing effort — and can hide contamination, not just depth.** The
-   common workaround for a too-long amplicon is to keep only R1 (or only
-   R2, depending on read orientation) and drop its mate. `run_dada2.R`
-   denoises R1 and R2 separately and merges each pair per-read: a true
-   DADA2 overlap-merge first, falling back to an `NNNNNNNNNN`-spacer
-   concatenation only for the specific read pairs that don't actually
-   overlap (`merge_hybrid()` — a blanket `justConcatenate=TRUE` for every
-   amplicon, an earlier version of this, throws away real overlapping
-   sequence for any amplicon short enough to merge; V4 true-merges ~90%+
-   of read pairs in real data). Either way, both primer-proximal ends of
-   every read contribute to the ASV. This isn't just an efficiency win: in
-   the sponge sample, a single ASV representing 52% of the V1-V3 amplicon's
-   reads turned out to be algal-symbiont mitochondrial DNA that the
-   discarded read alone would never have revealed — the kept read matched
-   neither the bacterial nor organellar reference on its own.
-
-4. **A classifier's default bucket is a liability if it means "assume
-   target."** Two separate contamination sources in this project's data
-   were missed, in two different tools, via the same underlying mistake:
-   something that didn't match any of a script's explicit checks fell
-   through to "bacterial" by default instead of "unknown." `flag_organellar.py`
-   now checks `Kingdom` before anything else for exactly this reason — see
-   its docstring and `examples/nematostella_pilot/README.md` for the full
-   story of both misses and how they were caught.
-
-5. **Classifying contamination after the fact is more expensive and less
-   complete than filtering it out before denoising — but a filter's own
-   reference database needs the same scrutiny as a classifier's default
-   bucket.** `python/prefilter_eukaryotic.py` BLASTs raw reads against a
-   sample-specific organellar reference database *before* DADA2 sees them,
-   built from each sample's own SILVA-classified organellar reads,
-   clustered by near-identical sequence rather than collapsed into a naive
-   consensus (`python/build_cluster_refs.py` — one SILVA category, e.g.
-   "mitochondrial," can contain multiple genuinely distinct source
-   sequences that a consensus would blend into something matching none of
-   them). This closes gaps no external reference genome can (divergent
-   host mitogenome haplotypes, symbiont strains with no GenBank entry) and
-   is faster than running the full pipeline on reads you'll discard anyway.
-   But a self-derived **plastid** reference is a special case: it's built
-   from the sample's own algal photosymbiont, and plastids are
-   cyanobacteria-derived, so it's close enough in sequence to free-living
-   cyanobacteria that the same identity threshold used for mitochondrial
-   references removed real bacterial reads, not contamination — confirmed
-   directly (a genuine *Cyanobium* signal collapsed by >99% before this was
-   caught). `prefilter_eukaryotic.py --plastid-min-identity` (default 96%)
-   fixes this with a stricter, category-specific threshold. The lesson
-   generalizes past this one case: a single global threshold applied to a
-   reference database with biologically heterogeneous categories can be
-   simultaneously too loose for one category and too strict for another.
-
-See `examples/nematostella_pilot/README.md` for the full worked example —
-including the mechanistic primer-vs-reference off-target analysis, the
-current 9-amplicon cross-host recommendation, and all four rounds of
-correction (two involving contamination initially miscounted as bacterial
-signal, one a primer-sorting bug, one the plastid-reference specificity fix
-above).
-
-## Pipeline
-
-```
-raw R1/R2 fastq.gz
-       │
-       ▼
-bin/sort_amplicons.py          primer-sort into per-amplicon, per-orientation
-  (cutadapt, anchored 5'-match,  matched R1/R2 pairs (both directions, since
-   forward + reverse sort per    a non-directional library reads a fragment
-   primer pair)                  from either end; anchoring prevents a read
-       │                         mis-sorting on a spurious internal match)
-       ▼
-python/prefilter_eukaryotic.py  (optional but recommended) BLAST raw reads
-  (per amplicon, per              against a sample-specific organellar
-   orientation)                   reference DB, drop read pairs where
-       │                          either mate matches -- removes host/
-       │                          symbiont contamination before DADA2 sees
-       │                          it instead of classifying it out after
-       ▼
-R/run_dada2.R                  per-orientation filter → learn errors →
-  (DADA2)                        denoise → per-read-pair hybrid merge (true
-       │                         overlap first, N-spacer concat fallback)
-       │                         → pool orientations → chimera removal →
-       │                         SILVA assignTaxonomy/addSpecies (N-free
-       │                         sequences only)
-       ▼
-<amp>_asv_table.tsv            seq, abundance, Kingdom..Species per ASV
-       │
-       ▼
-python/flag_organellar.py      split into <amp>_bacterial.tsv /
-                                  <amp>_organellar.tsv -- checks Kingdom
-                                  first (Eukaryota/unresolved is never
-                                  "bacterial" by default), then SILVA's own
-                                  Chloroplast (order) / Mitochondria (family)
-                                  taxa -- no separate reference DB needed
-       │
-       ▼
-R/check_split_chimeras.R       (optional) for N-spacer-concatenated ASVs
-  (concatenated ASVs only --      only: independently classify the forward
-   N-free true-merges skip        and reverse half, flag ASVs where the two
-   this, already screened by      halves disagree at a chosen rank (default
-   DADA2's overlap-agreement      Phylum) -- catches PCR chimeras with a
-   check at merge time)           breakpoint in the unsequenced R1/R2 gap,
-                                   which removeBimeraDenovo cannot see
-       │
-       ▼
-python/compare_amplicons.py    rank-normalized taxonomic overlap between
-                                  any two groups of amplicons' bacterial ASVs
-       │
-       ▼
-python/aggregate_abundance.py  ONE combined community profile across all
-                                  amplicons, accounting for the fact that
-                                  several of them target overlapping gene
-                                  regions (see below)
-```
-
-### Combining abundance across amplicons that overlap
-
-If you want a single community profile instead of per-amplicon ones,
-`compare_amplicons.py` isn't the tool for that (it only compares two
-groups' taxon sets). `aggregate_abundance.py` builds one, but naively
-summing or averaging raw percentages across all amplicons would be wrong
-here: 5 of this panel's 9 pairs (V1V3, V3V4, V3V6, V4, V4V6) substantially
-overlap each other's gene span, and the other 4 (V5V8, V6V8, V6V9, V7V8)
-overlap each other too — so summing treats "9 amplicons" as 9 independent
-samples when it's really closer to 2 independently-targeted regions that
-happened to get 5 and 4 redundant primer pairs tested in them,
-respectively.
-
-`aggregate_abundance.py` clusters amplicons by pairwise span overlap
-(`span: [start, end]` in `primers_16s_universal.yaml`, single-linkage at a
-configurable minimum-bp threshold), pools raw counts *within* each
-resulting region-group (depth-weighted — appropriate since group members
-are redundant assays of the same region), then takes the **unweighted
-mean** *across* region-groups per taxon — so each independently-targeted
-region contributes equally to the final number regardless of how many
-redundant primer pairs or how much depth it happened to get. Output
-includes each taxon's per-group percentage and the coefficient of
-variation across groups, so you can see when a taxon's apparent abundance
-is primer-region-dependent (likely bias) rather than stable across
-independent measurements.
-
-`python/predict_offtarget.py` is a standalone tool, used *before* committing
-to a primer pair: given candidate primer sequences and off-target reference
-sequences (host mtDNA, symbiont plastid/mtDNA, whatever you're worried
-about), it predicts which primers will cross-amplify which references by
-direct fuzzy alignment. **Check both primers of a pair, not just the
-forward one** — this is how the sponge/*Nematostella* work first missed
-that 520R (V1-V3's reverse primer) has predicted 85-100% identity to both
-the algal symbiont's plastid and mitochondrial references, even though 27F
-(the forward primer) is clean against all four references tested. A primer
-pair is only as clean as its worse-performing member. Note also that
-binding-site presence predicts *potential* for off-target priming, not
-realized contamination fraction — V3-V4 and V4's reverse primer (806R) also
-scores as a predicted risk (85-100% against three of the four references
-here) yet outperformed V1-V3 empirically, so treat this as a fast
-early-warning screen to run before sequencing, not a substitute for
-checking real data afterward.
-
-## Quickstart
+| Tool | Version | Install |
+|---|---|---|
+| Python | 3.8+ | — |
+| R | 4.3+ | — |
+| [DADA2](https://benjjneb.github.io/dada2/) (R package) | any recent | `BiocManager::install("dada2")` — pulls in Biostrings, ShortRead, Rcpp; first install compiles from source, 15-30 min |
+| [cutadapt](https://cutadapt.readthedocs.io/) | 4.0+ | `conda install -c bioconda cutadapt` or `pip install cutadapt` |
+| [BLAST+](https://www.ncbi.nlm.nih.gov/books/NBK569861/) (`blastn`, `makeblastdb`) | any recent | `conda install -c bioconda blast` |
+| [vsearch](https://github.com/torognes/vsearch) | any recent | `conda install -c bioconda vsearch` |
 
 ```bash
-pip install -r environment/requirements.txt
-# R + dada2 + SILVA reference: see environment/requirements.txt for setup
+pip install -r environment/requirements.txt   # just pyyaml -- everything else above is a system tool
+```
 
-# 1. Sort a subset of amplicons (primers trimmed off, needed for DADA2)
+You'll also need a **SILVA taxonomy reference** (used by `R/run_dada2.R`
+and every BLAST-based resolution tool below):
+
+```bash
+mkdir -p silva && cd silva
+curl -LO https://zenodo.org/record/4587955/files/silva_nr99_v138.1_train_set.fa.gz
+curl -LO https://zenodo.org/record/4587955/files/silva_species_assignment_v138.1.fa.gz
+# ~130MB + ~75MB
+```
+
+Several tools BLAST against SILVA directly rather than through DADA2's
+classifier (see "Resolving unclassified ASVs" below) — build a BLAST
+database from the same file once:
+
+```bash
+gunzip -k silva/silva_nr99_v138.1_train_set.fa.gz -c > silva/silva_nr99_v138.1.fasta
+makeblastdb -in silva/silva_nr99_v138.1.fasta -dbtype nucl -out silva/blastdb/silva_nr99_v138.1
+```
+
+## Quickstart: the simplest correct pipeline
+
+This gets you a real, working per-amplicon ASV + taxonomy table from raw
+paired-end reads. It doesn't use any of the refinements below (organellar
+pre-filtering, chimera-safe read splitting, unclassified-ASV resolution) --
+those are real improvements, worth adding once this works, but none of
+them is required for a first correct result.
+
+```bash
+# 1. Sort raw reads into per-amplicon, per-orientation matched pairs.
+#    A pooled non-directional library reads a given amplicon from either
+#    end, so both orientations are sorted and DADA2 processes both.
 python bin/sort_amplicons.py \
     --r1 sample_R1.fastq.gz --r2 sample_R2.fastq.gz \
     --primers config/primers_16s_universal.yaml \
-    --amplicons V1V3,V7V8,V6V8,V5V8,V6V9 \
+    --amplicons V1V3,V3V4,V4 \
     --outdir sorted/
 
-# 2. (optional, recommended if host/symbiont contamination is heavy)
-#    Pre-filter reads matching a sample-specific organellar reference DB
-#    BEFORE denoising -- see build_cluster_refs.py to build that DB from
-#    a first non-prefiltered pass, if no external reference genome exists.
-#    Note --plastid-min-identity: a self-derived plastid reference is
-#    close enough to free-living cyanobacteria that the default
-#    --min-identity is too loose for that category specifically.
-for amp in V1V3 V7V8 V6V8 V5V8 V6V9; do
-  python python/prefilter_eukaryotic.py \
-      --r1 sorted/${amp}_R1.fastq.gz --r2 sorted/${amp}_R2.fastq.gz \
-      --ref-db host_refs/sample_specific_organellar_refs \
-      --out-r1 sorted_filtered/${amp}_R1.fastq.gz \
-      --out-r2 sorted_filtered/${amp}_R2.fastq.gz \
-      --min-identity 85 --min-coverage 70 --plastid-min-identity 96
-done
-
-# 3. ASV inference + SILVA taxonomy (point --sorted-dir at sorted_filtered/
-#    if step 2 was run)
+# 2. ASV inference + SILVA taxonomy. Denoises R1/R2 separately, then merges
+#    each pair per-read: true overlap-merge where the reads actually
+#    overlap (short amplicons), N-spacer concatenation as a fallback where
+#    they don't (long amplicons) -- see "Chimera-safe amplicon splitting"
+#    below for why concatenation carries a small, fixable risk.
 Rscript R/run_dada2.R \
     --sorted-dir sorted/ \
-    --amplicons V1V3,V7V8,V6V8,V5V8,V6V9 \
+    --amplicons V1V3,V3V4,V4 \
     --outdir dada2/ \
     --silva-train silva/silva_nr99_v138.1_train_set.fa.gz \
     --silva-species silva/silva_species_assignment_v138.1.fa.gz \
     --threads 8
 
-# 4. Flag organellar ASVs per amplicon
-for amp in V1V3 V7V8 V6V8 V5V8 V6V9; do
+# 3. Split each amplicon's ASVs into bacterial vs. organellar
+#    (plastid/mitochondrial/eukaryotic/unclassified), using SILVA's own
+#    taxonomy -- no separate reference database needed for this step.
+for amp in V1V3 V3V4 V4; do
   python python/flag_organellar.py \
       --in dada2/${amp}_asv_table.tsv \
       --out-bacterial dada2/${amp}_bacterial.tsv \
       --out-organellar dada2/${amp}_organellar.tsv
 done
 
-# 5. Compare V1-V3 against the pooled 1389R-region group at family level
-python python/compare_amplicons.py \
-    --group-a dada2/V1V3_bacterial.tsv \
-    --group-b dada2/V7V8_bacterial.tsv dada2/V6V8_bacterial.tsv \
-              dada2/V5V8_bacterial.tsv dada2/V6V9_bacterial.tsv \
-    --rank Family --label-a V1-V3 --label-b "V5-V9 region"
+# 4. Combine into one community profile, correctly accounting for any
+#    amplicons that target overlapping gene regions (see below).
+python python/aggregate_abundance.py \
+    --primers config/primers_16s_universal.yaml \
+    --tables-dir dada2/ --amplicons V1V3,V3V4,V4 \
+    --rank Genus --min-overlap-bp 100 \
+    --out dada2/combined_genus_abundance.tsv
 ```
 
-## Primer config format
+That's a complete, correct pipeline. Everything below is a documented
+refinement worth adding, roughly in order of how much it tends to matter.
 
-`config/primers_16s_universal.yaml` ships with the 9-primer-pair panel used
-in the sponge/*Nematostella* work (see file for per-pair notes on which are
-safe/unsafe for animal hosts). Add new pairs the same way:
+## Refinement 1: resolving "Unclassified" ASVs (do this one first)
+
+SILVA's classifier only calls a taxonomic rank when its bootstrap
+confidence clears a threshold — below that, it reports NA rather than
+guessing, all the way up to Kingdom in the worst case. On real data this
+routinely leaves the *majority* of genuinely bacterial reads without a
+Genus call, and can even fail to confirm the read is bacterial at all
+(Kingdom=NA), which `flag_organellar.py` correctly excludes from the
+bacterial table by default — silently discarding real signal, not just
+under-resolving it. A second, differently-calibrated method (direct BLAST
+against the same reference, rather than kmer-based classification) usually
+resolves most of this gap:
+
+```bash
+# a) Kingdom=NA ASVs flag_organellar.py routed to <amp>_organellar.tsv --
+#    check whether they're actually identifiable bacteria SILVA's
+#    classifier was just too conservative to place.
+python python/rescue_unclassified_kingdom.py \
+    --in dada2/V4_organellar.tsv --blast-db silva/blastdb/silva_nr99_v138.1 \
+    --out-rescued dada2/V4_rescued.tsv --out-remaining dada2/V4_organellar_final.tsv
+# append the rescued rows onto V4_bacterial.tsv (same schema, safe to concatenate)
+tail -n +2 dada2/V4_rescued.tsv >> dada2/V4_bacterial.tsv
+
+# b) Genus=NA ASVs that ARE confidently bacterial -- resolve as far as a
+#    direct BLAST hit's own confidence tier supports (species/genus/family/
+#    order/class/phylum, per Yarza et al. 2014 16S-identity conventions).
+python python/resolve_unclassified_bacteria.py \
+    --in dada2/V4_bacterial.tsv --blast-db silva/blastdb/silva_nr99_v138.1 \
+    --out dada2/V4_bacterial_resolved.tsv --rank Genus
+
+# c) Fold the resolution back in, backfilling every rank a hit's tier
+#    actually supports -- and dropping any ASV with a confirmed
+#    phylum-level disagreement between its two halves (a PCR chimera
+#    signal, see "Chimera-safe amplicon splitting" below).
+python python/backfill_resolved_genus.py \
+    --in dada2/V4_bacterial_resolved.tsv --silva-train silva/silva_nr99_v138.1_train_set.fa.gz \
+    --out dada2_final/V4_bacterial.tsv
+```
+
+Point `aggregate_abundance.py --tables-dir` at the `dada2_final/` output
+of step (c) instead of the raw `dada2/` tables.
+
+**Before reporting a rank's "Unclassified" percentage, check what it
+actually means.** "Unclassified at Genus" is a much weaker claim than
+"unclassified" — on real data, 90%+ of a Genus-"Unclassified" bucket
+typically still has a real Family or Order identity, it just didn't clear
+the confidence bar for Genus specifically. Reporting the bare percentage
+overstates how little is actually known:
+
+```bash
+python python/resolution_depth_summary.py \
+    --tables-dir dada2_final/ --amplicons V1V3,V3V4,V4 \
+    --rank Genus --out resolution_depth.tsv
+```
+
+**A high-abundance ASV that still gets zero BLAST hit anywhere** (organellar
+refs, general bacterial 16S, SILVA's full reference, all checked) is a
+real, actionable signal once this resolution pipeline is in place — it
+means a genuinely divergent or novel organism, not just an under-resolved
+one. `rescue_unclassified_kingdom.py --flag-min-abundance` (default 500)
+flags these automatically; the appropriate follow-up is whole-genome
+assembly or shotgun metagenomic sequencing, since amplicon BLAST against a
+16S database has a hard ceiling for organisms with no sufficiently close
+reference to match against at all.
+
+## Refinement 2: chimera-safe amplicon splitting
+
+With short paired-end reads (commonly ~150bp/side), most amplicons longer
+than 2×read-length don't have R1 and R2 overlapping — `run_dada2.R`
+concatenates them with an `NNNNNNNNNN` spacer instead (`merge_hybrid()`).
+This is a reasonable default, but it asserts a linkage — "these two reads
+came from the same organism" — that a PCR chimera can violate: if the true
+recombination crossover happens to fall in the unsequenced gap between R1
+and R2, concatenation silently fuses two different organisms' reads into
+one fictitious ASV, and nothing downstream can tell.
+
+**Check whether this applies to each of your amplicons** using your primer
+positions and read length against your marker gene's known hypervariable-
+region boundaries (for 16S, widely-cited *E. coli* numbering: V1 69-99, V2
+137-242, V3 433-497, V4 576-682, V5 822-879, V6 986-1043, V7 1117-1173, V8
+1243-1294, V9 1435-1465 — treat as approximate). For each amplicon:
+
+1. Do R1's window (`[primer_start, primer_start + read_len]`) and R2's
+   window (`[primer_end - read_len, primer_end]`) overlap? If yes, you're
+   already safe — `run_dada2.R` true-merges these, and DADA2 requires the
+   overlap to actually agree before accepting a merge, which is itself a
+   same-molecule consistency check concatenation doesn't have.
+2. If no, does each read's window fall *entirely within, or entirely
+   outside of, complete variable-region boundaries* — i.e. does neither
+   read get clipped mid-region? If yes, this amplicon is a good candidate
+   for `--split-amplicons`: treat R1 and R2 as two independent
+   single-region measurements instead of forcing a linkage. If a read's
+   window straddles a region boundary (clips into the edge of one), you
+   can still use it — the coarser Kingdom/Order/Family calls are far more
+   robust to edge-clipping than fine genus/species resolution — but it's a
+   weaker case for splitting; concatenation with a downstream chimera check
+   (below) is the more conservative choice.
+
+```bash
+Rscript R/run_dada2.R \
+    --sorted-dir sorted/ --amplicons V5V8,V6V8 \
+    --split-amplicons V5V8,V6V8 \
+    --outdir dada2/ \
+    --silva-train silva/silva_nr99_v138.1_train_set.fa.gz \
+    --silva-species silva/silva_species_assignment_v138.1.fa.gz
+```
+
+This produces `<amp>_fwdhalf`/`<amp>_revhalf` ASV tables instead of one
+`<amp>` table — add entries for them to your primers YAML (span-only, same
+primers as the parent amplicon) so `aggregate_abundance.py`'s
+region-overlap clustering treats each read's own coverage correctly; see
+the `_fwdhalf`/`_revhalf` entries already in `config/primers_16s_universal.yaml`
+for the pattern. Bonus: split-amplicon ASVs are always N-free, so
+`addSpecies` runs on all of them, not just the true-overlap-merged subset.
+
+**For amplicons you keep concatenated** (didn't qualify for splitting),
+check for chimeras directly instead:
+
+```bash
+Rscript R/check_split_chimeras.R \
+    --asv-table dada2/V3V4_asv_table.tsv \
+    --silva-train silva/silva_nr99_v138.1_train_set.fa.gz \
+    --out dada2/V3V4_chimera_check.tsv --rank Phylum
+```
+
+Flags ASVs where the two halves (split at the N-spacer) disagree at
+Phylum level — a real, mechanistically distinct chimera signal, not the
+generic disagreement `removeBimeraDenovo` already screens for.
+
+## Refinement 3: organellar pre-filtering (for host-associated samples)
+
+If your samples are host-associated (gut, skin, coral, sponge, etc.) and
+you expect host mitochondrial or symbiont plastid DNA to co-amplify,
+filtering it out **before** DADA2 is both faster and more complete than
+classifying it out after — a real amplicon in this project's pilot data
+was 99.9% host DNA, which otherwise swamps both compute and the ASV table.
+
+**Bootstrap a sample-specific reference first.** External reference
+genomes (a database mitogenome, say) rarely cover your actual sample's
+strain-level or individual haplotype variation. Run the pipeline once
+*without* pre-filtering, then build references from what it finds:
+
+```bash
+# One non-prefiltered pass (steps 1-3 of the quickstart), then:
+python python/build_cluster_refs.py \
+    --organellar dada2/V4_organellar.tsv --amplicon V4 --host mysample \
+    --out-fasta host_refs/sample_specific_organellar_refs.fasta --append
+# repeat --append for every amplicon, then combine with any external
+# reference genomes you have and build the BLAST database:
+makeblastdb -in host_refs/sample_specific_organellar_refs.fasta -dbtype nucl \
+    -out host_refs/sample_specific_organellar_refs
+```
+
+Clusters near-identical sequences (vsearch, not a naive consensus) within
+each `(organelle_type, length)` group — a single SILVA category like
+"mitochondrial" can contain multiple genuinely distinct source sequences
+(the host's own mitochondrion and a symbiont's, say) that averaging into
+one consensus would blend into something matching neither.
+
+**Then pre-filter before the real run:**
+
+```bash
+python python/prefilter_eukaryotic.py \
+    --r1 sorted/V4_R1.fastq.gz --r2 sorted/V4_R2.fastq.gz \
+    --ref-db host_refs/sample_specific_organellar_refs \
+    --out-r1 sorted_filtered/V4_R1.fastq.gz --out-r2 sorted_filtered/V4_R2.fastq.gz \
+    --min-identity 85 --min-coverage 70 --plastid-min-identity 96
+```
+
+Then point `run_dada2.R --sorted-dir` at `sorted_filtered/` instead.
+
+**Two things worth knowing before you trust this blindly:**
+
+- `--plastid-min-identity` (default 96%, stricter than `--min-identity`'s
+  85%) exists because a self-derived **plastid** reference is close enough
+  in sequence to free-living cyanobacteria (plastids are cyanobacteria-
+  derived) that the default threshold removes real bacterial reads, not
+  just contamination — confirmed directly on real data (a genuine
+  free-living *Cyanobium* signal collapsed by >99% before this was
+  caught). The same caution likely applies to any organelle category with
+  a known free-living bacterial relative.
+- For amplicons using `--split-amplicons` (Refinement 2), also pass
+  `prefilter_eukaryotic.py --independent-mates`: it drops each mate
+  separately on an organellar hit rather than the whole pair, so a PCR
+  chimera between real bacterial DNA and host/symbiont DNA loses only the
+  contaminated mate, not the genuinely bacterial one alongside it. Only
+  use this mode with `--split-amplicons` — it produces mate-count-
+  mismatched output that `run_dada2.R`'s default (paired) path can't consume.
+
+**Validate the filter worked**: after running the full pipeline, SILVA
+should report very few (ideally near-zero) reads still landing in
+`organelle_type == eukaryotic` for a filtered amplicon. If it still
+reports a lot, the reference is likely missing something (a symbiont
+strain, a different individual's haplotype).
+
+## Diagnosing which primer or region is the actual problem
+
+If contamination or an "Unclassified" bucket is worse than expected, these
+tools narrow down *why*, rather than just *how much*:
+
+| Tool | Answers |
+|---|---|
+| `python/predict_offtarget.py` | **Before sequencing**: given primer sequences and off-target reference sequences (host mtDNA, symbiont plastid/mtDNA), predicts which primers will cross-amplify which references by direct fuzzy alignment. Check both primers of a pair — a pair is only as clean as its worse member. |
+| `python/raw_contamination_by_primer.py` | **After sequencing, before any pre-filter**: BLASTs raw reads per (amplicon, primer role) against your organellar reference, so a primer's *actual* off-target rate isn't confounded by how well your pre-filter reference happens to cover it. Reports one row per primer/amplicon-context, so you can see whether a primer is dirty on its own or only in combination with a specific partner. |
+| `python/region_contamination_summary.py` | **After the full pipeline**: pools every read that independently measures a given gene region (not amplicon) and reports post-filter residual contamination per region — tells apart "this region is intrinsically hard to keep clean" from "this specific primer's binding site is the problem," which per-amplicon reporting conflates. |
+| `python/resolution_depth_summary.py` | What a rank's "Unclassified" bucket actually resolves to (see Refinement 1). |
+| `python/compare_amplicons.py` | Rank-normalized taxonomic overlap between any two groups of amplicons' bacterial ASVs — useful for checking whether two non-overlapping amplicons are describing the same community. |
+| `python/resolve_eukaryotic.py` | For ASVs `flag_organellar.py` confidently calls `eukaryotic` (not just `unclassified`) — BLASTs against your sample-specific reference to say *which* host/symbiont organism it actually is. |
+
+## Combining abundance across amplicons that overlap
+
+`aggregate_abundance.py` clusters amplicons by pairwise span overlap
+(`span: [start, end]` in the primers YAML, single-linkage at a configurable
+minimum-bp threshold via `--min-overlap-bp`), pools raw counts *within*
+each resulting region-group (depth-weighted — appropriate since group
+members are redundant assays of the same region), then takes the
+**unweighted mean** *across* region-groups per taxon — so each
+independently-targeted region contributes equally to the final number
+regardless of how many redundant primer pairs or how much depth it
+happened to get. Naively summing or averaging raw percentages across all
+amplicons would let a region tested by 5 redundant primer pairs dominate
+one tested by a single pair 5x over. Output includes each taxon's
+per-group percentage and the coefficient of variation across groups, so
+you can see when a taxon's apparent abundance is primer-region-dependent
+(likely bias) rather than stable across independent measurements.
+
+## Primer config format
 
 ```yaml
 primer_pairs:
   MyAmplicon:
     forward: [SEQUENCE1, SEQUENCE2_if_multiple_variants]
     reverse: [SEQUENCE1]
-    region: "approximate E. coli 16S span, for reference"
+    forward_name: "515F"           # used by raw_contamination_by_primer.py's output labels
+    reverse_name: "806R"
+    region: "515-806 (V4)"         # free text, for reference
+    span: [515, 806]               # [start, end] in your marker gene's numbering -- required
+                                    # for aggregate_abundance.py's region-overlap clustering
     notes: "free text"
 ```
 
-`sort_amplicons.py --primers` and `predict_offtarget.py --primers` both read
-this format directly.
+`config/primers_16s_universal.yaml` ships with the 9-primer-pair panel used
+in this toolkit's source projects (see file for per-pair notes, including
+which are safe/unsafe for host-associated samples). `sort_amplicons.py`,
+`predict_offtarget.py`, `raw_contamination_by_primer.py`, and
+`aggregate_abundance.py` all read this format directly.
 
 ## What this toolkit deliberately does not do
 
@@ -274,7 +353,8 @@ this format directly.
   quick exploratory runs, but ASVs + rank-normalized comparison is the
   better default for anything where cross-amplicon comparison matters.
 - No bundled reference data (raw fastqs, SILVA, BLAST databases) — see
-  `environment/requirements.txt` for what to download and where.
-- No visualization/report generation yet. Both source projects have their
-  own `generate_report.py`-style figure code; this toolkit is the
-  data-processing layer underneath that, not a replacement for it.
+  Prerequisites above for what to download and where.
+- No visualization/report generation. This toolkit is the data-processing
+  layer; plotting is left to whatever you already use (a worked example's
+  charts, built as standalone HTML, are described in
+  `examples/nematostella_pilot/README.md`).
