@@ -52,14 +52,49 @@ python bin/sort_amplicons.py \
     --amplicons $AMPLICONS --outdir sorted/
 ```
 
-**2. If your samples are host-associated** (gut, skin, coral, sponge, etc.)
+**2. Classify each amplicon's read architecture.** With short paired-end
+reads, most amplicons longer than 2×read-length don't have R1 and R2
+overlapping. The question that determines how each amplicon should be
+processed: does *each read individually* cover one complete hypervariable
+region of your marker gene, or does a read get clipped mid-region?
+
+For each amplicon, using your primer positions, your read length, and your
+marker gene's known hypervariable-region boundaries (16S, widely-cited
+*E. coli* numbering: V1 69-99, V2 137-242, V3 433-497, V4 576-682, V5
+822-879, V6 986-1043, V7 1117-1173, V8 1243-1294, V9 1435-1465 —
+approximate):
+
+- **R1/R2 windows overlap** → true-merge (DADA2's default when they
+  overlap): one continuous, DADA2-overlap-verified sequence. No special
+  handling needed.
+- **R1/R2 don't overlap, and each read's window falls entirely within (or
+  entirely outside of) complete region boundaries** → use
+  `--split-amplicons` (step 4). This is the **recommended default** for
+  every amplicon that qualifies: each read is a complete, independent,
+  single-region measurement, reported by the region it actually covers
+  rather than forced into a fictitious amplicon-level linkage. It also
+  sidesteps a real correctness problem outright — concatenating two reads
+  that don't overlap asserts "these came from the same organism," which a
+  PCR chimera with its breakpoint in the unsequenced gap can violate with
+  nothing downstream able to tell.
+- **R1/R2 don't overlap, and a read's window clips into the edge of a
+  region** → concatenate (DADA2's fallback), and run the chimera check in
+  step 4. This is a fallback for amplicons that don't cleanly qualify for
+  splitting, not the default choice.
+
+Most amplicons in a typical multi-region panel end up in the middle
+category. Plan on `--split-amplicons` being how most of your non-overlapping
+amplicons are actually run.
+
+**3. If your samples are host-associated** (gut, skin, coral, sponge, etc.)
 and host mitochondrial or symbiont plastid DNA is likely to co-amplify,
 filter it out before denoising. Skip this step entirely for
-non-host-associated samples (soil, water, etc.).
+non-host-associated samples (soil, water, etc.). `SPLIT_AMPLICONS` here is
+whichever subset of `$AMPLICONS` you classified as split-eligible in step 2.
 
 ```bash
-# 2a. One pass without filtering, to see what organellar contamination
-#     actually looks like in this sample (needed to build 2b's reference):
+# 3a. One pass without filtering, to see what organellar contamination
+#     actually looks like in this sample (needed to build 3b's reference):
 Rscript R/run_dada2.R --sorted-dir sorted/ --amplicons $AMPLICONS --outdir dada2_pass1/ \
     --silva-train $SILVA --silva-species $SILVA_SP --threads 8
 for amp in $(echo $AMPLICONS | tr ',' ' '); do
@@ -70,53 +105,53 @@ for amp in $(echo $AMPLICONS | tr ',' ' '); do
 done
 makeblastdb -in host_refs/refs.fasta -dbtype nucl -out host_refs/refs
 
-# 2b. Filter raw reads against that reference before the real run:
+# 3b. Filter raw reads against that reference before the real run. Split-
+#     eligible amplicons use --independent-mates: it drops each mate
+#     separately on an organellar hit rather than the whole pair, so a PCR
+#     chimera between real bacterial DNA and host/symbiont DNA loses only
+#     the contaminated mate, matching step 2's per-read treatment. Other
+#     amplicons use the default paired mode (both mates must survive
+#     together, since they'll be concatenated into one ASV).
+SPLIT_AMPLICONS=V5V8,V6V8   # subset of $AMPLICONS you classified as split-eligible
 mkdir -p sorted_filtered
 for amp in $(echo $AMPLICONS | tr ',' ' '); do
+  mode=""
+  echo ",$SPLIT_AMPLICONS," | grep -q ",$amp," && mode="--independent-mates"
   for suffix in "" "_rev"; do
     python python/prefilter_eukaryotic.py \
         --r1 sorted/${amp}${suffix}_R1.fastq.gz --r2 sorted/${amp}${suffix}_R2.fastq.gz \
         --ref-db host_refs/refs \
         --out-r1 sorted_filtered/${amp}${suffix}_R1.fastq.gz --out-r2 sorted_filtered/${amp}${suffix}_R2.fastq.gz \
-        --min-identity 85 --min-coverage 70 --plastid-min-identity 96
+        --min-identity 85 --min-coverage 70 --plastid-min-identity 96 $mode
   done
 done
 ```
 
-**3. ASV inference + SILVA taxonomy.** Point `--sorted-dir` at
-`sorted_filtered/` if you ran step 2, otherwise `sorted/`.
-
-```bash
-Rscript R/run_dada2.R \
-    --sorted-dir sorted_filtered/ --amplicons $AMPLICONS --outdir dada2/ \
-    --silva-train $SILVA --silva-species $SILVA_SP --threads 8
-```
-
-If an amplicon's two reads don't overlap given your read length, this
-concatenates them with an `NNNNNNNNNN` spacer by default — correct, but
-vulnerable to PCR chimeras with a breakpoint in the unsequenced gap. If a
-given amplicon's R1/R2 windows each fall cleanly within (or entirely
-outside) your marker gene's known hypervariable-region boundaries — i.e.
-neither read is clipped mid-region — add it to `--split-amplicons` instead
-to process R1/R2 as independent single-region measurements, which sidesteps
-the chimera risk entirely:
+**4. ASV inference + SILVA taxonomy.** One call, listing your split-eligible
+amplicons (step 2) in `--split-amplicons` — this is not a special case, it's
+how most non-overlapping amplicons in a typical panel should run. Point
+`--sorted-dir` at `sorted_filtered/` if you ran step 3, otherwise `sorted/`.
 
 ```bash
 Rscript R/run_dada2.R \
     --sorted-dir sorted_filtered/ --amplicons $AMPLICONS \
-    --split-amplicons V5V8,V6V8 \
+    --split-amplicons $SPLIT_AMPLICONS \
     --outdir dada2/ --silva-train $SILVA --silva-species $SILVA_SP --threads 8
 ```
 
-(This produces `<amp>_fwdhalf`/`<amp>_revhalf` tables instead of one
-`<amp>` table — add span-only entries for them to your primers YAML; see
-the `_fwdhalf`/`_revhalf` entries already in
-`config/primers_16s_universal.yaml` for the pattern. If you also ran step
-2, re-run it with `--independent-mates` for these amplicons so a
-chimeric bacterial+organellar pair loses only the organellar mate.)
+Split-eligible amplicons produce `<amp>_fwdhalf`/`<amp>_revhalf` tables
+instead of one `<amp>` table, each an independent, single-region
+measurement — add span-only entries for them to your primers YAML (same
+primers as the parent amplicon, span = that read's actual covered region);
+see the `_fwdhalf`/`_revhalf` entries already in
+`config/primers_16s_universal.yaml` for the pattern. From here on, treat
+`$AMPLICONS` as the *expanded* list (whole amplicons that weren't split,
+plus every `_fwdhalf`/`_revhalf` for the ones that were) — everything below
+operates per-table regardless of which kind it is.
 
-For any amplicon you leave concatenated, check it for chimeras directly —
-`removeBimeraDenovo` cannot see this class of chimera:
+For any amplicon that didn't qualify for splitting (still concatenated),
+check it for chimeras directly — `removeBimeraDenovo` cannot see this
+class of chimera:
 
 ```bash
 for amp in $(echo $AMPLICONS | tr ',' ' '); do
@@ -126,10 +161,11 @@ for amp in $(echo $AMPLICONS | tr ',' ' '); do
 done
 ```
 
-**4. Split bacterial vs. organellar**, then resolve everything SILVA's
+**5. Split bacterial vs. organellar**, then resolve everything SILVA's
 classifier wasn't confident enough to fully place — this recovers real
 signal, not just cosmetic detail; a real dataset had the majority of its
-genuinely-bacterial reads sitting Genus-unresolved before this step:
+genuinely-bacterial reads sitting Genus-unresolved before this step. Runs
+identically on whole-amplicon and `_fwdhalf`/`_revhalf` tables:
 
 ```bash
 mkdir -p dada2_final
@@ -151,8 +187,13 @@ for amp in $(echo $AMPLICONS | tr ',' ' '); do
 done
 ```
 
-**5. Combine into one community profile**, correctly accounting for any
-amplicons that target overlapping gene regions:
+**6. Combine into one community profile.** This is where the region-based
+framing pays off directly: `aggregate_abundance.py` clusters every table
+(whole amplicons and `_fwdhalf`/`_revhalf` alike) by gene-span overlap, so
+redundant measurements of the same region — including two different
+`_fwdhalf` tables from different amplicons that happen to cover the same
+region — are correctly pooled together rather than treated as independent
+samples:
 
 ```bash
 python python/aggregate_abundance.py \
@@ -162,7 +203,7 @@ python python/aggregate_abundance.py \
     --out dada2_final/combined_genus_abundance.tsv
 ```
 
-**6. Plot it:**
+**7. Plot it:**
 
 ```bash
 python python/plot_abundance.py \
@@ -175,7 +216,7 @@ python python/plot_abundance.py \
 **`<amp>_bacterial.tsv` / `<amp>_organellar.tsv`** — one row per ASV: `seq`,
 `abundance`, `Kingdom`..`Species` (any rank may be `NA`), `organelle_type`
 (`bacterial`/`plastid`/`mitochondrial`/`eukaryotic`/`unclassified`), and
-after step 4's resolution, `taxonomy_source` (`SILVA` or
+after step 5's resolution, `taxonomy_source` (`SILVA` or
 `BLAST-resolved:<tier>`, so you can always tell where a call came from).
 
 **`combined_*_abundance.tsv`** — one row per taxon: `taxon`,
