@@ -1,5 +1,6 @@
 # Python
 pyyaml>=6.0
+matplotlib>=3.5   # only needed for python/plot_abundance.py
 
 # External tools (not pip-installable) -- see README.md's Prerequisites
 # section for the full install-and-run guide; summary here:
