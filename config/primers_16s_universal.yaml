@@ -18,6 +18,13 @@
 #   span [start, end]   : REQUIRED for aggregate_abundance.py's region-overlap
 #                          clustering
 #
+# A primer's read window (span/region) is a property of the primer itself --
+# fixed by its binding position -- not of which pair it happens to be used
+# in. E.g. 1389R produces the same ~150bp window (partial V8) whether paired
+# with 967F (V5V8), 1048F (V6V8), or V7F (V7V8). `primer_regions` below is
+# the single canonical source for this; every span/region on a pair or
+# virtual sub-amplicon entry should match its primer(s)' entry there.
+#
 # **Current recommendation across this 9-pair panel: V4 (515F/806R), with
 # V5V8 (~967F/1389R) as a close second.** Worst-case yield (fraction of raw
 # reads surviving the full pipeline as real bacterial signal, across two
@@ -40,6 +47,32 @@
 # artifact) can hide in it indefinitely -- audit what a script's default
 # bucket actually contains before trusting a summary number, at every rank
 # and every filtering step, not just once.
+
+# Per-primer READ WINDOW -- not the primer binding site itself. `span` is
+# the ~150bp of 16S gene sequence a single-end read starting at that primer
+# actually covers, keyed by short primer name (one entry per primer, not
+# per pair -- e.g. 1389R appears once even though it's reused by
+# V5V8/V6V8/V7V8). The primer's own binding site is just one edge of that
+# span, ~20bp wide: the START for a forward primer (its read extends
+# rightward/downstream from there), the END for a reverse primer (its read
+# extends leftward/upstream from there) -- e.g. 520R anneals around
+# position ~534 and its read covers back to 384, spanning V3. `role` is
+# which end of a pair a primer is normally used as; `region` is the
+# approximate variable-region label for the span. V7F's span is null:
+# V7V8 (its only pair) is short enough to true-overlap-merge rather than
+# split, so its single-end read window was never independently computed.
+primer_regions:
+  27F:    {role: forward, span: [8, 158],     region: "full V1, partial V2"}
+  341F:   {role: forward, span: [341, 491],   region: "partial V3"}
+  515F:   {role: forward, span: [515, 665],   region: "partial V4"}
+  967F:   {role: forward, span: [967, 1117],  region: "~V6"}
+  1048F:  {role: forward, span: [1048, 1198], region: "~V7"}
+  V7F:    {role: forward, span: null,         region: "V7 start (not split -- V7V8 true-merges)"}
+  520R:   {role: reverse, span: [384, 534],   region: "full V3"}
+  806R:   {role: reverse, span: [656, 806],   region: "partial V4"}
+  926R:   {role: reverse, span: [776, 926],   region: "full V5"}
+  1389R:  {role: reverse, span: [1239, 1389], region: "~V8"}
+  1492R:  {role: reverse, span: [1342, 1492], region: "~V9"}
 
 primer_pairs:
   V1V3:
@@ -125,43 +158,43 @@ primer_pairs:
   #    the confirmed per-read variable-region coverage this is based on.
   V5V8_fwdhalf:
     forward: [MWACGCGMRGAACCTTACCW]
-    reverse: [GACGGGCGGTGTGTACAAGG]
-    region: "967-1117 (V5V8, R1/forward-primer read only -- ~V6)"
+    reverse: []
+    region: "967-1117 (V5V8, R1/967F only -- ~V6)"
     span: [967, 1117]
     notes: "Independent taxonomy for V5V8's forward-primer-proximal read (R1). See V5V8 for primer sequences; this entry exists only for region-overlap clustering."
 
   V5V8_revhalf:
-    forward: [MWACGCGMRGAACCTTACCW]
+    forward: []
     reverse: [GACGGGCGGTGTGTACAAGG]
-    region: "1239-1389 (V5V8, R2/reverse-primer read only -- ~V8)"
+    region: "1239-1389 (V5V8, R2/1389R only -- ~V8)"
     span: [1239, 1389]
     notes: "Independent taxonomy for V5V8's reverse-primer-proximal read (R2). See V5V8 for primer sequences; this entry exists only for region-overlap clustering."
 
   V6V8_fwdhalf:
     forward: [ATGGCTGTCGTCAGCTCGTG]
-    reverse: [GACGGGCGGTGTGTACAAGG]
-    region: "1048-1198 (V6V8, R1/forward-primer read only -- ~V7)"
+    reverse: []
+    region: "1048-1198 (V6V8, R1/1048F only -- ~V7)"
     span: [1048, 1198]
     notes: "Independent taxonomy for V6V8's forward-primer-proximal read (R1). See V6V8 for primer sequences; this entry exists only for region-overlap clustering."
 
   V6V8_revhalf:
-    forward: [ATGGCTGTCGTCAGCTCGTG]
+    forward: []
     reverse: [GACGGGCGGTGTGTACAAGG]
-    region: "1239-1389 (V6V8, R2/reverse-primer read only -- ~V8)"
+    region: "1239-1389 (V6V8, R2/1389R only -- ~V8)"
     span: [1239, 1389]
     notes: "Independent taxonomy for V6V8's reverse-primer-proximal read (R2). See V6V8 for primer sequences; this entry exists only for region-overlap clustering."
 
   V6V9_fwdhalf:
     forward: [ATGGCTGTCGTCAGCTCGTG]
-    reverse: [TACCTTGTTACGACTTCGCT, TACCTTGTTACGACTTCATT]
-    region: "1048-1198 (V6V9, R1/forward-primer read only -- ~V7)"
+    reverse: []
+    region: "1048-1198 (V6V9, R1/1048F only -- ~V7)"
     span: [1048, 1198]
     notes: "Independent taxonomy for V6V9's forward-primer-proximal read (R1). See V6V9 for primer sequences; this entry exists only for region-overlap clustering."
 
   V6V9_revhalf:
-    forward: [ATGGCTGTCGTCAGCTCGTG]
+    forward: []
     reverse: [TACCTTGTTACGACTTCGCT, TACCTTGTTACGACTTCATT]
-    region: "1342-1492 (V6V9, R2/reverse-primer read only -- ~V9)"
+    region: "1342-1492 (V6V9, R2/1492R only -- ~V9)"
     span: [1342, 1492]
     notes: "Independent taxonomy for V6V9's reverse-primer-proximal read (R2). See V6V9 for primer sequences; this entry exists only for region-overlap clustering."
 
@@ -171,13 +204,13 @@ primer_pairs:
   # once these are also processed as independent single-end reads.
   V1V3_fwdhalf:
     forward: [AGAGTTTGATCCTGGCTCAG, AGAGTTTGATCATGGCTCAG]
-    reverse: [CGTCAGGCTTTCGCCCATTG, GGTCAGGCTTTCGCCCATTG, GATCAGGCTTTCGCCCATTG, CGTCAGGCTTGCGCCCATTG]
+    reverse: []
     region: "8-158 (V1V3, R1/27F only -- full V1, partial V2)"
     span: [8, 158]
     notes: "Independent taxonomy for V1V3's forward-primer-proximal read (R1, 27F). See V1V3 for primer sequences."
 
   V1V3_revhalf:
-    forward: [AGAGTTTGATCCTGGCTCAG, AGAGTTTGATCATGGCTCAG]
+    forward: []
     reverse: [CGTCAGGCTTTCGCCCATTG, GGTCAGGCTTTCGCCCATTG, GATCAGGCTTTCGCCCATTG, CGTCAGGCTTGCGCCCATTG]
     region: "384-534 (V1V3, R2/520R only -- full V3)"
     span: [384, 534]
@@ -185,13 +218,13 @@ primer_pairs:
 
   V3V4_fwdhalf:
     forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
-    reverse: [CTACCAGGGTATCTAATCCT]
+    reverse: []
     region: "341-491 (V3V4, R1/341F only -- partial V3)"
     span: [341, 491]
     notes: "Independent taxonomy for V3V4's forward-primer-proximal read (R1, 341F). See V3V4 for primer sequences."
 
   V3V4_revhalf:
-    forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
+    forward: []
     reverse: [CTACCAGGGTATCTAATCCT]
     region: "656-806 (V3V4, R2/806R only -- partial V4)"
     span: [656, 806]
@@ -199,13 +232,13 @@ primer_pairs:
 
   V3V6_fwdhalf:
     forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
-    reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    reverse: []
     region: "341-491 (V3V6, R1/341F only -- partial V3)"
     span: [341, 491]
     notes: "Independent taxonomy for V3V6's forward-primer-proximal read (R1, 341F). See V3V6 for primer sequences."
 
   V3V6_revhalf:
-    forward: [CCTACGGGNGGCWGCAG, CCTACGGGAGGCAGCA]
+    forward: []
     reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
     region: "776-926 (V3V6, R2/926R only -- full V5)"
     span: [776, 926]
@@ -213,13 +246,13 @@ primer_pairs:
 
   V4V6_fwdhalf:
     forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
-    reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
+    reverse: []
     region: "515-665 (V4V6, R1/515F only -- partial V4)"
     span: [515, 665]
     notes: "Independent taxonomy for V4V6's forward-primer-proximal read (R1, 515F). See V4V6 for primer sequences."
 
   V4V6_revhalf:
-    forward: [GTGYCAGCMGCCGCGGTA, GCCAGCAGCCGCGGTAA]
+    forward: []
     reverse: [CCGTCAATTCCTTTGAGTTT, CCGTCAATTCATTTGAGTTT]
     region: "776-926 (V4V6, R2/926R only -- full V5)"
     span: [776, 926]
